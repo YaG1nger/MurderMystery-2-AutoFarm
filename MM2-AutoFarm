@@ -63,7 +63,6 @@ local function clearActiveHighlight()
     end
 end
 
--- Керування анімаціями (викликом під час польоту)
 local function setCharacterAnimations(enabled)
     local character = LocalPlayer.Character
     if character then
@@ -81,18 +80,38 @@ local function removeSafeZonePlatform()
     end
 end
 
+-- Створення платформи по центру workspace.Lobby + 100 студів вгору
 local function createSafeZone()
     if not safeZonePart then
+        local centerPosition = Vector3.new(0, 10000, 0) -- Запасна позиція, якщо Lobby не знайдено
+        
+        pcall(function()
+            local lobbyModel = Workspace:FindFirstChild("Lobby")
+            if lobbyModel and lobbyModel:IsA("Model") then
+                local cf, size = lobbyModel:GetBoundingBox()
+                centerPosition = cf.Position
+            end
+        end)
+
         safeZonePart = Instance.new("Part")
         safeZonePart.Shape = Enum.PartType.Cylinder
         safeZonePart.Size = Vector3.new(1, 50, 50)
-        safeZonePart.Position = Vector3.new(0, 10000, 0)
+        -- Ставимо в центр лоббі і піднімаємо на 100 студів вгору по Y
+        safeZonePart.Position = Vector3.new(centerPosition.X, centerPosition.Y + 100, centerPosition.Z)
         safeZonePart.Orientation = Vector3.new(0, 0, 90)
         safeZonePart.Anchored = true
         safeZonePart.BrickColor = BrickColor.new("Bright blue")
         safeZonePart.Material = Enum.Material.SmoothPlastic
         safeZonePart.Parent = Workspace
     end
+end
+
+-- Отримання точної позиції платформи для телепортації гравця на 2 студа вище
+local function getSafeZoneTeleportCFrame()
+    if safeZonePart then
+        return CFrame.new(safeZonePart.Position + Vector3.new(0, 2, 0))
+    end
+    return CFrame.new(0, 10102, 0)
 end
 
 LocalPlayer.CharacterAdded:Connect(function(character)
@@ -118,12 +137,12 @@ LocalPlayer.CharacterAdded:Connect(function(character)
         task.wait(0.5)
         if safeZoneEnabled then
             createSafeZone()
-            root.CFrame = CFrame.new(0, 10005, 0)
+            root.CFrame = getSafeZoneTeleportCFrame()
         end
     end
 end)
 
-local function isCoinDisappearing(coinVisual)
+local functionኮ isCoinDisappearing(coinVisual)
     if not coinVisual or not coinVisual.Parent then return true end
     if coinVisual:IsA("BasePart") then
         if coinVisual.Transparency > 0.5 or coinVisual.Size.Magnitude < 0.5 then
@@ -299,15 +318,17 @@ local function checkAndUpdateCoinsOnTouch()
 
             if safeZoneEnabled and root then
                 createSafeZone()
-                root.CFrame = CFrame.new(0, 10005, 0)
+                root.CFrame = getSafeZoneTeleportCFrame()
 
                 task.spawn(function()
                     while isAutoFarmActive and safeZoneEnabled do
                         local allPartnersReady = true
+                        local platformPos = safeZonePart and safeZonePart.Position or Vector3.new(0, 10000, 0)
+
                         for _, partner in pairs(selectedPartners) do
                             if partner and partner.Character and partner.Character:FindFirstChild("HumanoidRootPart") then
                                 local partnerRoot = partner.Character.HumanoidRootPart
-                                local dist = (Vector3.new(0, 10000, 0) - partnerRoot.Position).Magnitude
+                                local dist = (platformPos - partnerRoot.Position).Magnitude
                                 if dist > 100 then
                                     allPartnersReady = false
                                     break
@@ -368,7 +389,7 @@ local function stopAutoFarm()
         currentTween = nil
     end
     clearActiveHighlight()
-    setCharacterAnimations(true) -- Увімкнути анімації при зупинці фарму
+    setCharacterAnimations(true)
     
     local character = LocalPlayer.Character
     if character and character:FindFirstChild("HumanoidRootPart") then
@@ -428,7 +449,6 @@ local function startAutoFarm()
                 local duration = distance / flySpeed
                 local currentRotation = rootPart.CFrame - rootPart.Position
 
-                -- ВИМКЕННЯ анімацій САМЕ ПІД ЧАС РУХУ ДО МОНЕТИ
                 setCharacterAnimations(false)
 
                 local tweenInfo = TweenInfo.new(duration, Enum.EasingStyle.Linear)
@@ -461,14 +481,11 @@ local function startAutoFarm()
                     task.wait(0.03)
                 end
 
-                -- УВІМКНЕННЯ анімацій після того, як долетіли до монети
                 setCharacterAnimations(true)
-
                 checkAndUpdateCoinsOnTouch()
                 clearActiveHighlight()
             else
                 rootPart.Anchored = false
-                -- Якщо стоїмо та чекаємо монети — анімації увімкнені
                 setCharacterAnimations(true)
                 task.wait(0.2)
             end
