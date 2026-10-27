@@ -40,6 +40,9 @@ local previousCoinsValue = 0
 local hasReachedLimit = false
 local noclipConnection = nil
 
+-- Змінна для статусу фарма
+local currentFarmStatus = "Idle"
+
 -- Anti-AFK
 local antiAfkConnection
 local function setupAntiAfk()
@@ -74,7 +77,7 @@ local function setCharacterAnimations(enabled)
     end
 end
 
--- Захист від флінгу (вимикаємо колізії для всіх інших гравців)
+-- Захист від флінгу
 local function setupAntiFling()
     if noclipConnection then return end
     noclipConnection = RunService.Stepped:Connect(function()
@@ -233,18 +236,15 @@ local function getClosestCoin()
     return closestCoin
 end
 
--- Підтримка обох шляхів до контейнера (ПК та мобільний)
 local function getCoinBagsContainer()
     local mainGui = PlayerGui:FindFirstChild("MainGUI")
     if not mainGui then return nil end
 
-    -- 1. Спроба знайти через стандартний шлях (ПК)
     local success, res = pcall(function()
         return mainGui.Game.CoinBags.Container
     end)
     if success and res then return res end
 
-    -- 2. Спроба через мобільний шлях (Lobby.Dock)
     success, res = pcall(function()
         return mainGui.Lobby.Dock.CoinBags.Container
     end)
@@ -287,7 +287,6 @@ local function isBagFull()
     pcall(function()
         local container = getCoinBagsContainer()
         if container then
-            -- Шукаємо FullBagIcon в контейнері незалежно від шляху
             for _, bagItem in ipairs(container:GetChildren()) do
                 local fullIcon = bagItem:FindFirstChild("FullBagIcon", true)
                 if fullIcon and fullIcon.Visible then
@@ -343,32 +342,51 @@ local function checkAndUpdateCoinsOnTouch()
             teleportToRandomSpawn()
 
             if hasPartners then
+                currentFarmStatus = "Waiting for Partner"
                 task.spawn(function()
+                    -- Перші 0.5 сек не реагуємо на ресет, щоб уникнути випадкового спрацювання
+                    task.wait(0.5)
+
                     while isAutoFarmActive and safeZoneEnabled do
-                        local allPartnersReady = true
+                        local allReady = true
                         local characterRoot = character and character:FindFirstChild("HumanoidRootPart")
 
                         for _, partner in pairs(selectedPartners) do
                             if partner and partner.Character and partner.Character:FindFirstChild("HumanoidRootPart") and characterRoot then
                                 local partnerRoot = partner.Character.HumanoidRootPart
                                 local dist = (characterRoot.Position - partnerRoot.Position).Magnitude
-                                if dist > 10 then
-                                    allPartnersReady = false
+                                
+                                -- Перевіряємо що партнер в радіусі 100 студів ТА у нього теж повний мішок (або він різко перемістився на спавн)
+                                local partnerBagFull = false
+                                pcall(function()
+                                    local pGui = partner.PlayerGui
+                                    local pContainer = pGui.MainGUI.Game.CoinBags.Container
+                                    for _, bItem in ipairs(pContainer:GetChildren()) do
+                                        local fIcon = bItem:FindFirstChild("FullBagIcon", true)
+                                        if fIcon and fIcon.Visible then
+                                            partnerBagFull = true
+                                            break
+                                        end
+                                    end
+                                end)
+
+                                if dist > 100 or not partnerBagFull then
+                                    allReady = false
                                     break
                                 end
                             else
-                                allPartnersReady = true
+                                allReady = false
                             end
                         end
 
-                        if allPartnersReady then
-                            task.wait(0.5)
+                        if allReady then
+                            task.wait(0.3)
                             if character and character:FindFirstChild("Humanoid") then
                                 character:BreakJoints()
                             end
                             break
                         end
-                        task.wait(1)
+                        task.wait(0.5)
                     end
                 end)
             end
@@ -384,6 +402,7 @@ local function stopAutoFarm()
     isTimerRunning = false
     sessionStartTime = nil
     hasReachedLimit = false
+    currentFarmStatus = "Idle"
     
     removeAntiAfk()
     removeAntiFling()
@@ -422,8 +441,15 @@ local function startAutoFarm()
 
     task.spawn(function()
         while isAutoFarmActive do
+            if isBagFull() then
+                currentFarmStatus = "Waiting for Coins"
+                task.wait(0.5)
+                continue
+            end
+
             local character = LocalPlayer.Character
             if not character or not character:FindFirstChild("HumanoidRootPart") then
+                currentFarmStatus = "Waiting for Coins"
                 task.wait(0.2)
                 continue
             end
@@ -432,6 +458,7 @@ local function startAutoFarm()
             local targetCoinVisual = getClosestCoin()
 
             if targetCoinVisual and targetCoinVisual:IsDescendantOf(Workspace) then
+                currentFarmStatus = "Moving to Coin"
                 local parentCoinServer = targetCoinVisual.Parent
                 if parentCoinServer then
                     ignoredCoins[parentCoinServer] = true
@@ -464,6 +491,7 @@ local function startAutoFarm()
                 currentTween = TweenService:Create(rootPart, tweenInfo, {CFrame = targetCFrame * currentRotation})
                 currentTween:Play()
 
+                currentFarmStatus = "Collecting Coin"
                 while currentTween and currentTween.PlaybackState == Enum.PlaybackState.Playing do
                     if isAnyCoinClose(rootPart) then
                         rootPart.Anchored = false
@@ -494,6 +522,7 @@ local function startAutoFarm()
                 checkAndUpdateCoinsOnTouch()
                 clearActiveHighlight()
             else
+                currentFarmStatus = "Waiting for Coins"
                 rootPart.Anchored = false
                 setCharacterAnimations(true)
                 task.wait(0.2)
@@ -522,8 +551,8 @@ screenGui.Parent = PlayerGui
 
 local mainFrame = Instance.new("Frame")
 mainFrame.Name = "MainFrame"
-mainFrame.Size = UDim2.new(0, 240, 0, 355)
-mainFrame.Position = UDim2.new(0.5, -120, 0.4, -177)
+mainFrame.Size = UDim2.new(0, 240, 0, 380) -- Збільшено висоту для нового статусу
+mainFrame.Position = UDim2.new(0.5, -120, 0.4, -190)
 mainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
 mainFrame.BorderSizePixel = 0
 mainFrame.Active = true
@@ -569,7 +598,7 @@ uiListLayout.Padding = UDim.new(0, 5)
 uiListLayout.Parent = scrollingList
 
 local autoResetBoxFill, safeZoneBoxFill
-local updatePlayerList -- попереднє оголошення для функції
+local updatePlayerList
 
 updatePlayerList = function()
     for _, child in ipairs(scrollingList:GetChildren()) do
@@ -617,7 +646,6 @@ updatePlayerList = function()
     end
 end
 
--- Автоматичний деселект і видалення зі списку, якщо гравець вийшов з гри
 Players.PlayerRemoving:Connect(function(player)
     if selectedPartners[player] then
         selectedPartners[player] = nil
@@ -735,7 +763,6 @@ toggleBtn.MouseButton1Click:Connect(function()
     end
 end)
 
--- Auto Reset Чекбокс
 local autoResetButton = Instance.new("TextButton")
 autoResetButton.Size = UDim2.new(1, -20, 0, 26)
 autoResetButton.Position = UDim2.new(0, 10, 0, 82)
@@ -793,7 +820,6 @@ autoResetButton.MouseButton1Click:Connect(function()
     end
 end)
 
--- Safe Zone Чекбокс
 local safeZoneButton = Instance.new("TextButton")
 safeZoneButton.Size = UDim2.new(1, -20, 0, 26)
 safeZoneButton.Position = UDim2.new(0, 10, 0, 114)
@@ -938,12 +964,25 @@ timerLabel.TextSize = 12
 timerLabel.TextXAlignment = Enum.TextXAlignment.Left
 timerLabel.Parent = mainFrame
 
+-- Новий TextLabel для відображення статусу фарма
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Size = UDim2.new(1, -20, 0, 22)
+statusLabel.Position = UDim2.new(0, 10, 0, 304)
+statusLabel.BackgroundTransparency = 1
+statusLabel.Text = "Status: Idle"
+statusLabel.TextColor3 = Color3.fromRGB(255, 150, 100)
+statusLabel.Font = Enum.Font.GothamBold
+statusLabel.TextSize = 12
+statusLabel.TextXAlignment = Enum.TextXAlignment.Left
+statusLabel.Parent = mainFrame
+
 task.spawn(function()
     while true do
         if isAutoFarmActive then
             statsLabel.Text = "Speed: " .. coinsPerHour .. "/h"
             roundCollectedLabel.Text = "Coins per round: " .. currentMatchCoins .. "/" .. maxMatchCoins
             totalCollectedLabel.Text = "Total collected: " .. sessionCoinsCollected
+            statusLabel.Text = "Status: " .. currentFarmStatus
             
             local count = 0
             for _, _ in pairs(selectedPartners) do
@@ -965,6 +1004,7 @@ task.spawn(function()
             totalCollectedLabel.Text = "Total collected: 0"
             partnerLabel.Text = "Partners: 0"
             timerLabel.Text = "Time: 00:00"
+            statusLabel.Text = "Status: Idle"
         end
         task.wait(1)
     end
