@@ -3,6 +3,7 @@ local Workspace = game:GetService("Workspace")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local VirtualUser = game:GetService("VirtualUser")
+local RunService = game:GetService("RunService")
 
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
@@ -37,6 +38,7 @@ local sessionStartTime = nil
 local isTimerRunning = false
 local previousCoinsValue = 0
 local hasReachedLimit = false
+local noclipConnection = nil
 
 -- Anti-AFK
 local antiAfkConnection
@@ -69,6 +71,30 @@ local function setCharacterAnimations(enabled)
         if animateScript and animateScript:IsA("LocalScript") then
             animateScript.Disabled = not enabled
         end
+    end
+end
+
+-- Захист від флінгу (вимикаємо колізії для всіх інших гравців)
+local function setupAntiFling()
+    if noclipConnection then return end
+    noclipConnection = RunService.Stepped:Connect(function()
+        if not isAutoFarmActive then return end
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer and player.Character then
+                for _, part in ipairs(player.Character:GetDescendants()) do
+                    if part:IsA("BasePart") then
+                        part.CanCollide = false
+                    end
+                end
+            end
+        end
+    end)
+end
+
+local function removeAntiFling()
+    if noclipConnection then
+        noclipConnection:Disconnect()
+        noclipConnection = nil
     end
 end
 
@@ -207,16 +233,30 @@ local function getClosestCoin()
     return closestCoin
 end
 
+-- Підтримка обох шляхів до контейнера (ПК та мобільний)
+local function getCoinBagsContainer()
+    local mainGui = PlayerGui:FindFirstChild("MainGUI")
+    if not mainGui then return nil end
+
+    -- 1. Спроба знайти через стандартний шлях (ПК)
+    local success, res = pcall(function()
+        return mainGui.Game.CoinBags.Container
+    end)
+    if success and res then return res end
+
+    -- 2. Спроба через мобільний шлях (Lobby.Dock)
+    success, res = pcall(function()
+        return mainGui.Lobby.Dock.CoinBags.Container
+    end)
+    if success and res then return res end
+
+    return nil
+end
+
 local function getRealGameCoins()
     local total = 0
     pcall(function()
-        local mainGui = PlayerGui:FindFirstChild("MainGUI")
-        if not mainGui then return end
-        local gameGui = mainGui:FindFirstChild("Game")
-        if not gameGui then return end
-        local coinBags = gameGui:FindFirstChild("CoinBags")
-        if not coinBags then return end
-        local container = coinBags:FindFirstChild("Container")
+        local container = getCoinBagsContainer()
         if not container then return end
 
         for _, itemFolder in ipairs(container:GetChildren()) do
@@ -245,9 +285,16 @@ end
 local function isBagFull()
     local full = false
     pcall(function()
-        local bagIcon = PlayerGui.MainGUI.Game.CoinBags.Container.Candy.FullBagIcon
-        if bagIcon and bagIcon.Visible then
-            full = true
+        local container = getCoinBagsContainer()
+        if container then
+            -- Шукаємо FullBagIcon в контейнері незалежно від шляху
+            for _, bagItem in ipairs(container:GetChildren()) do
+                local fullIcon = bagItem:FindFirstChild("FullBagIcon", true)
+                if fullIcon and fullIcon.Visible then
+                    full = true
+                    break
+                end
+            end
         end
     end)
     return full
@@ -286,7 +333,6 @@ local function checkAndUpdateCoinsOnTouch()
         local character = LocalPlayer.Character
         local root = character and character:FindFirstChild("HumanoidRootPart")
 
-        -- Перевіряємо, чи є обрані напарники
         local hasPartners = false
         for _, _ in pairs(selectedPartners) do
             hasPartners = true
@@ -296,7 +342,6 @@ local function checkAndUpdateCoinsOnTouch()
         if safeZoneEnabled and root then
             teleportToRandomSpawn()
 
-            -- Ресет робимо ТІЛЬКИ якщо реально вибрані напарники, щоб синхронізувати рестарт катки
             if hasPartners then
                 task.spawn(function()
                     while isAutoFarmActive and safeZoneEnabled do
@@ -341,6 +386,7 @@ local function stopAutoFarm()
     hasReachedLimit = false
     
     removeAntiAfk()
+    removeAntiFling()
     
     pcall(function()
         Workspace.FallenPartsDestroyHeight = -500
@@ -361,6 +407,7 @@ end
 
 local function startAutoFarm()
     setupAntiAfk()
+    setupAntiFling()
     
     lastObservedGameCoins = getRealGameCoins()
     currentMatchCoins = lastObservedGameCoins
@@ -522,8 +569,9 @@ uiListLayout.Padding = UDim.new(0, 5)
 uiListLayout.Parent = scrollingList
 
 local autoResetBoxFill, safeZoneBoxFill
+local updatePlayerList -- попереднє оголошення для функції
 
-local function updatePlayerList()
+updatePlayerList = function()
     for _, child in ipairs(scrollingList:GetChildren()) do
         if child:IsA("TextButton") then
             child:Destroy()
@@ -568,6 +616,16 @@ local function updatePlayerList()
         end
     end
 end
+
+-- Автоматичний деселект і видалення зі списку, якщо гравець вийшов з гри
+Players.PlayerRemoving:Connect(function(player)
+    if selectedPartners[player] then
+        selectedPartners[player] = nil
+        if playersFrame.Visible then
+            updatePlayerList()
+        end
+    end
+end)
 
 local topBar = Instance.new("Frame")
 topBar.Size = UDim2.new(1, 0, 0, 35)
