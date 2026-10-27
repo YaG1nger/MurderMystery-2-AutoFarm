@@ -66,21 +66,18 @@ local function clearActiveHighlight()
     end
 end
 
--- Функція оновлення фіолетового підсвічування партнерів
 local function updatePartnerHighlights()
-    -- Видаляємо всі старі підсвічування
-    for player, h in pairs(partnerHighlights) do
+    for _, h in pairs(partnerHighlights) do
         if h then h:Destroy() end
     end
     partnerHighlights = {}
 
-    -- Створюємо нові для всіх вибраних партнерів
     for _, partner in pairs(selectedPartners) do
         if partner and partner.Character then
             local char = partner.Character
             local hl = Instance.new("Highlight")
             hl.Name = "PartnerHighlight"
-            hl.FillColor = Color3.fromRGB(160, 50, 255) -- Фіолетовий колір
+            hl.FillColor = Color3.fromRGB(160, 50, 255)
             hl.OutlineColor = Color3.fromRGB(255, 255, 255)
             hl.FillTransparency = 0.4
             hl.OutlineTransparency = 0
@@ -90,7 +87,6 @@ local function updatePartnerHighlights()
     end
 end
 
--- Стежимо за тим, щоб підсвічування оновлювалося, якщо партнер респавниться
 for _, player in ipairs(Players:GetPlayers()) do
     player.CharacterAdded:Connect(function(char)
         task.wait(0.5)
@@ -142,10 +138,24 @@ local function removeAntiFling()
     end
 end
 
+-- Безпечна телепортація з гарантованим зняттям Anchor
 local function teleportToRandomSpawn()
     local character = LocalPlayer.Character
-    if not character or not character:FindFirstChild("HumanoidRootPart") then return end
+    if not character or not character:FindFirstChild("HumanoidRootPart") then return false end
     local rootPart = character.HumanoidRootPart
+
+    -- Гарантовано знімаємо анкор перед перевіркою і телепортацією
+    local attempts = 0
+    while rootPart.Anchored and attempts < 5 do
+        rootPart.Anchored = false
+        task.wait(0.05)
+        attempts = attempts + 1
+    end
+
+    -- Якщо анкор все ще є, не телепортуємося, а пробуємо знову
+    if rootPart.Anchored then
+        return false
+    end
 
     local spawnsFolder = Workspace:FindFirstChild("Lobby") and Workspace.Lobby:FindFirstChild("Spawns")
     if spawnsFolder then
@@ -159,14 +169,18 @@ local function teleportToRandomSpawn()
         if #spawnsList > 0 then
             local randomSpawn = spawnsList[math.random(1, #spawnsList)]
             rootPart.CFrame = randomSpawn.CFrame + Vector3.new(0, 3, 0)
+            return true
         else
             rootPart.CFrame = CFrame.new(0, 100, 0)
+            return true
         end
     end
+    return false
 end
 
 LocalPlayer.CharacterAdded:Connect(function(character)
     local root = character:WaitForChild("HumanoidRootPart")
+    root.Anchored = false -- Знімаємо анкор при спавні
     
     local hasPartners = false
     local _, _ = next(selectedPartners)
@@ -382,12 +396,19 @@ local function checkAndUpdateCoinsOnTouch()
         end
 
         if safeZoneEnabled and root then
-            teleportToRandomSpawn()
-
-            if hasPartners then
+            -- Цикл спроб телепортації, поки анкор повністю не зніметься
+            task.spawn(function()
                 currentFarmStatus = "Waiting for Partner"
-                task.spawn(function()
-                    task.wait(0.5)
+                local successTeleport = false
+                while not successTeleport and isAutoFarmActive do
+                    successTeleport = teleportToRandomSpawn()
+                    if not successTeleport then
+                        task.wait(0.1)
+                    end
+                end
+
+                if hasPartners and successTeleport then
+                    task.wait(0.5) -- Захист 0.5 сек від випадкового ресету
 
                     while isAutoFarmActive and safeZoneEnabled do
                         local allReady = true
@@ -429,9 +450,10 @@ local function checkAndUpdateCoinsOnTouch()
                         end
                         task.wait(0.5)
                     end
-                end)
-            end
+                end
+            end)
         elseif autoResetEnabled and character then
+            root.Anchored = false
             character:BreakJoints()
         end
     end
@@ -483,7 +505,7 @@ local function startAutoFarm()
     task.spawn(function()
         while isAutoFarmActive do
             if isBagFull() then
-                currentFarmStatus = "Waiting for Coins"
+                currentFarmStatus = "Waiting for Partner"
                 task.wait(0.5)
                 continue
             end
