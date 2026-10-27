@@ -27,7 +27,6 @@ local ignoredCoins = {}
 
 local autoResetEnabled = false
 local safeZoneEnabled = false
-local safeZonePart = nil
 local selectedPartners = {}
 
 local sessionCoinsCollected = 0
@@ -73,60 +72,39 @@ local function setCharacterAnimations(enabled)
     end
 end
 
-local function removeSafeZonePlatform()
-    if safeZonePart then
-        safeZonePart:Destroy()
-        safeZonePart = nil
-    end
-end
+local function teleportToRandomSpawn()
+    local character = LocalPlayer.Character
+    if not character or not character:FindFirstChild("HumanoidRootPart") then return end
+    local rootPart = character.HumanoidRootPart
 
--- Створення платформи по центру workspace.Lobby + 100 студів вгору
-local function createSafeZone()
-    if not safeZonePart then
-        local centerPosition = Vector3.new(0, 10000, 0)
-        
-        pcall(function()
-            local lobbyModel = Workspace:FindFirstChild("Lobby")
-            if lobbyModel and lobbyModel:IsA("Model") then
-                local cf, size = lobbyModel:GetBoundingBox()
-                centerPosition = cf.Position
+    local spawnsFolder = Workspace:FindFirstChild("Lobby") and Workspace.Lobby:FindFirstChild("Spawns")
+    if spawnsFolder then
+        local spawnsList = {}
+        for _, child in ipairs(spawnsFolder:GetChildren()) do
+            if child:IsA("BasePart") then
+                table.insert(spawnsList, child)
             end
-        end)
+        end
 
-        safeZonePart = Instance.new("Part")
-        safeZonePart.Shape = Enum.PartType.Cylinder
-        safeZonePart.Size = Vector3.new(1, 50, 50)
-        safeZonePart.Position = Vector3.new(centerPosition.X, centerPosition.Y + 100, centerPosition.Z)
-        safeZonePart.Orientation = Vector3.new(0, 0, 90)
-        safeZonePart.Anchored = true
-        safeZonePart.BrickColor = BrickColor.new("Bright blue")
-        safeZonePart.Material = Enum.Material.SmoothPlastic
-        safeZonePart.Parent = Workspace
+        if #spawnsList > 0 then
+            local randomSpawn = spawnsList[math.random(1, #spawnsList)]
+            rootPart.CFrame = randomSpawn.CFrame + Vector3.new(0, 3, 0)
+        else
+            rootPart.CFrame = CFrame.new(0, 100, 0)
+        end
     end
-end
-
-local function getSafeZoneTeleportCFrame()
-    if safeZonePart then
-        return CFrame.new(safeZonePart.Position + Vector3.new(0, 2, 0))
-    end
-    return CFrame.new(0, 10102, 0)
 end
 
 LocalPlayer.CharacterAdded:Connect(function(character)
     local root = character:WaitForChild("HumanoidRootPart")
     
     local hasPartners = false
-    for _, _ in pairs(selectedPartners) do
-        hasPartners = true
-        break
-    end
+    local _, _ = next(selectedPartners)
+    if _ then hasPartners = true end
 
     if hasPartners then
         safeZoneEnabled = true
         autoResetEnabled = true
-        createSafeZone()
-    else
-        removeSafeZonePlatform()
     end
     
     hasReachedLimit = false
@@ -134,8 +112,7 @@ LocalPlayer.CharacterAdded:Connect(function(character)
     if isAutoFarmActive then
         task.wait(0.5)
         if safeZoneEnabled then
-            createSafeZone()
-            root.CFrame = getSafeZoneTeleportCFrame()
+            teleportToRandomSpawn()
         end
     end
 end)
@@ -265,28 +242,15 @@ local function getRealGameCoins()
     return total
 end
 
-local function areCoinsLeftOnMap()
-    local found = false
+local function isBagFull()
+    local full = false
     pcall(function()
-        for _, child in ipairs(Workspace:GetChildren()) do
-            if not ignoredNames[child.Name] and child:IsA("Model") then
-                local coinContainer = child:FindFirstChild("CoinContainer")
-                if coinContainer then
-                    for _, coinServer in ipairs(coinContainer:GetChildren()) do
-                        if coinServer.Name == "Coin_Server" then
-                            local coinVisual = coinServer:FindFirstChild("CoinVisual")
-                            if coinVisual and not isCoinDisappearing(coinVisual) then
-                                found = true
-                                break
-                            end
-                        end
-                    end
-                end
-            end
-            if found then break end
+        local bagIcon = PlayerGui.MainGUI.Game.CoinBags.Container.Candy.FullBagIcon
+        if bagIcon and bagIcon.Visible then
+            full = true
         end
     end)
-    return found
+    return full
 end
 
 local function checkAndUpdateCoinsOnTouch()
@@ -298,6 +262,10 @@ local function checkAndUpdateCoinsOnTouch()
         currentMatchCoins = newCoins
         previousCoinsValue = newCoins
 
+        if currentMatchCoins > maxMatchCoins then
+            maxMatchCoins = currentMatchCoins
+        end
+
         if not isTimerRunning then
             isTimerRunning = true
             sessionStartTime = tick()
@@ -307,27 +275,39 @@ local function checkAndUpdateCoinsOnTouch()
         if elapsed > 0.1 and sessionCoinsCollected > 0 then
             coinsPerHour = math.floor((sessionCoinsCollected / elapsed) * 3600)
         end
+    elseif newCoins < previousCoinsValue then
+        currentMatchCoins = newCoins
+        previousCoinsValue = newCoins
+        hasReachedLimit = false
+    end
 
-        if currentMatchCoins >= 40 and not areCoinsLeftOnMap() and not hasReachedLimit then
-            hasReachedLimit = true
-            maxMatchCoins = currentMatchCoins
-            local character = LocalPlayer.Character
-            local root = character and character:FindFirstChild("HumanoidRootPart")
+    if isBagFull() and not hasReachedLimit then
+        hasReachedLimit = true
+        local character = LocalPlayer.Character
+        local root = character and character:FindFirstChild("HumanoidRootPart")
 
-            if safeZoneEnabled and root then
-                createSafeZone()
-                root.CFrame = getSafeZoneTeleportCFrame()
+        -- Перевіряємо, чи є обрані напарники
+        local hasPartners = false
+        for _, _ in pairs(selectedPartners) do
+            hasPartners = true
+            break
+        end
 
+        if safeZoneEnabled and root then
+            teleportToRandomSpawn()
+
+            -- Ресет робимо ТІЛЬКИ якщо реально вибрані напарники, щоб синхронізувати рестарт катки
+            if hasPartners then
                 task.spawn(function()
                     while isAutoFarmActive and safeZoneEnabled do
                         local allPartnersReady = true
-                        local platformPos = safeZonePart and safeZonePart.Position or Vector3.new(0, 10000, 0)
+                        local characterRoot = character and character:FindFirstChild("HumanoidRootPart")
 
                         for _, partner in pairs(selectedPartners) do
-                            if partner and partner.Character and partner.Character:FindFirstChild("HumanoidRootPart") then
+                            if partner and partner.Character and partner.Character:FindFirstChild("HumanoidRootPart") and characterRoot then
                                 local partnerRoot = partner.Character.HumanoidRootPart
-                                local dist = (platformPos - partnerRoot.Position).Magnitude
-                                if dist > 100 then
+                                local dist = (characterRoot.Position - partnerRoot.Position).Magnitude
+                                if dist > 10 then
                                     allPartnersReady = false
                                     break
                                 end
@@ -346,17 +326,10 @@ local function checkAndUpdateCoinsOnTouch()
                         task.wait(1)
                     end
                 end)
-            elseif autoResetEnabled and character then
-                character:BreakJoints()
             end
+        elseif autoResetEnabled and character then
+            character:BreakJoints()
         end
-    elseif newCoins < previousCoinsValue then
-        if currentMatchCoins > 0 then
-            maxMatchCoins = currentMatchCoins
-        end
-        currentMatchCoins = newCoins
-        previousCoinsValue = newCoins
-        hasReachedLimit = false
     end
 end
 
@@ -368,15 +341,6 @@ local function stopAutoFarm()
     hasReachedLimit = false
     
     removeAntiAfk()
-    
-    local hasPartners = false
-    for _, _ in pairs(selectedPartners) do
-        hasPartners = true
-        break
-    end
-    if not hasPartners then
-        removeSafeZonePlatform()
-    end
     
     pcall(function()
         Workspace.FallenPartsDestroyHeight = -500
@@ -489,15 +453,6 @@ local function startAutoFarm()
             end
         end
 
-        local hasPartners = false
-        for _, _ in pairs(selectedPartners) do
-            hasPartners = true
-            break
-        end
-        if not hasPartners then
-            removeSafeZonePlatform()
-        end
-
         pcall(function()
             Workspace.FallenPartsDestroyHeight = -500
         end)
@@ -598,19 +553,14 @@ local function updatePlayerList()
                 end
 
                 local hasPartners = false
-                for _, _ in pairs(selectedPartners) do
-                    hasPartners = true
-                    break
-                end
+                local _, _ = next(selectedPartners)
+                if _ then hasPartners = true end
 
                 if hasPartners then
                     autoResetEnabled = true
                     safeZoneEnabled = true
                     autoResetBoxFill.BackgroundColor3 = Color3.fromRGB(80, 220, 120)
                     safeZoneBoxFill.BackgroundColor3 = Color3.fromRGB(80, 220, 120)
-                    createSafeZone()
-                else
-                    removeSafeZonePlatform()
                 end
 
                 updatePlayerList()
@@ -770,10 +720,9 @@ autoResetLabel.Parent = autoResetButton
 
 autoResetButton.MouseButton1Click:Connect(function()
     local hasPartners = false
-    for _, _ in pairs(selectedPartners) do
-        hasPartners = true
-        break
-    end
+    local _, _ = next(selectedPartners)
+    if _ then hasPartners = true end
+
     if hasPartners then return end
 
     autoResetEnabled = not autoResetEnabled
@@ -781,7 +730,6 @@ autoResetButton.MouseButton1Click:Connect(function()
         autoResetBoxFill.BackgroundColor3 = Color3.fromRGB(80, 220, 120)
         safeZoneEnabled = false
         safeZoneBoxFill.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-        removeSafeZonePlatform()
     else
         autoResetBoxFill.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
     end
@@ -830,10 +778,9 @@ safeZoneLabel.Parent = safeZoneButton
 
 safeZoneButton.MouseButton1Click:Connect(function()
     local hasPartners = false
-    for _, _ in pairs(selectedPartners) do
-        hasPartners = true
-        break
-    end
+    local _, _ = next(selectedPartners)
+    if _ then hasPartners = true end
+
     if hasPartners then return end
 
     safeZoneEnabled = not safeZoneEnabled
@@ -841,10 +788,8 @@ safeZoneButton.MouseButton1Click:Connect(function()
         safeZoneBoxFill.BackgroundColor3 = Color3.fromRGB(80, 220, 120)
         autoResetEnabled = false
         autoResetBoxFill.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-        createSafeZone()
     else
         safeZoneBoxFill.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-        removeSafeZonePlatform()
     end
 end)
 
