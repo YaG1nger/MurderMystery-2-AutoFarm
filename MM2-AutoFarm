@@ -32,6 +32,7 @@ local selectedPartners = {}
 
 local sessionCoinsCollected = 0
 local currentMatchCoins = 0
+local maxMatchCoins = 0
 local coinsPerHour = 0
 local sessionStartTime = nil
 local isTimerRunning = false
@@ -62,6 +63,7 @@ local function clearActiveHighlight()
     end
 end
 
+-- Керування анімаціями (викликом під час польоту)
 local function setCharacterAnimations(enabled)
     local character = LocalPlayer.Character
     if character then
@@ -82,8 +84,10 @@ end
 local function createSafeZone()
     if not safeZonePart then
         safeZonePart = Instance.new("Part")
-        safeZonePart.Size = Vector3.new(40, 1, 40)
+        safeZonePart.Shape = Enum.PartType.Cylinder
+        safeZonePart.Size = Vector3.new(1, 50, 50)
         safeZonePart.Position = Vector3.new(0, 10000, 0)
+        safeZonePart.Orientation = Vector3.new(0, 0, 90)
         safeZonePart.Anchored = true
         safeZonePart.BrickColor = BrickColor.new("Bright blue")
         safeZonePart.Material = Enum.Material.SmoothPlastic
@@ -112,8 +116,6 @@ LocalPlayer.CharacterAdded:Connect(function(character)
 
     if isAutoFarmActive then
         task.wait(0.5)
-        setCharacterAnimations(false)
-        
         if safeZoneEnabled then
             createSafeZone()
             root.CFrame = CFrame.new(0, 10005, 0)
@@ -291,6 +293,7 @@ local function checkAndUpdateCoinsOnTouch()
 
         if currentMatchCoins >= 40 and not areCoinsLeftOnMap() and not hasReachedLimit then
             hasReachedLimit = true
+            maxMatchCoins = currentMatchCoins
             local character = LocalPlayer.Character
             local root = character and character:FindFirstChild("HumanoidRootPart")
 
@@ -329,6 +332,9 @@ local function checkAndUpdateCoinsOnTouch()
             end
         end
     elseif newCoins < previousCoinsValue then
+        if currentMatchCoins > 0 then
+            maxMatchCoins = currentMatchCoins
+        end
         currentMatchCoins = newCoins
         previousCoinsValue = newCoins
         hasReachedLimit = false
@@ -362,7 +368,7 @@ local function stopAutoFarm()
         currentTween = nil
     end
     clearActiveHighlight()
-    setCharacterAnimations(true)
+    setCharacterAnimations(true) -- Увімкнути анімації при зупинці фарму
     
     local character = LocalPlayer.Character
     if character and character:FindFirstChild("HumanoidRootPart") then
@@ -383,8 +389,6 @@ local function startAutoFarm()
     pcall(function()
         Workspace.FallenPartsDestroyHeight = 0/0
     end)
-
-    setCharacterAnimations(false)
 
     task.spawn(function()
         while isAutoFarmActive do
@@ -424,6 +428,9 @@ local function startAutoFarm()
                 local duration = distance / flySpeed
                 local currentRotation = rootPart.CFrame - rootPart.Position
 
+                -- ВИМКЕННЯ анімацій САМЕ ПІД ЧАС РУХУ ДО МОНЕТИ
+                setCharacterAnimations(false)
+
                 local tweenInfo = TweenInfo.new(duration, Enum.EasingStyle.Linear)
                 currentTween = TweenService:Create(rootPart, tweenInfo, {CFrame = targetCFrame * currentRotation})
                 currentTween:Play()
@@ -454,10 +461,15 @@ local function startAutoFarm()
                     task.wait(0.03)
                 end
 
+                -- УВІМКНЕННЯ анімацій після того, як долетіли до монети
+                setCharacterAnimations(true)
+
                 checkAndUpdateCoinsOnTouch()
                 clearActiveHighlight()
             else
                 rootPart.Anchored = false
+                -- Якщо стоїмо та чекаємо монети — анімації увімкнені
+                setCharacterAnimations(true)
                 task.wait(0.2)
             end
         end
@@ -484,7 +496,7 @@ local function startAutoFarm()
     end)
 end
 
--- ================= ІНТЕРФЕЙС (ENGLISH VERSION) =================
+-- ================= ІНТЕРФЕЙС =================
 
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "CoinFarmMenu"
@@ -592,7 +604,6 @@ local function updatePlayerList()
     end
 end
 
--- Top Bar (Dragging)
 local topBar = Instance.new("Frame")
 topBar.Size = UDim2.new(1, 0, 0, 35)
 topBar.BackgroundTransparency = 1
@@ -701,9 +712,7 @@ toggleBtn.MouseButton1Click:Connect(function()
     end
 end)
 
--- ---- Секція для білих боксів-галочок (Checkbox UI) ----
-
--- 1. Auto Reset Чекбокс
+-- Auto Reset Чекбокс
 local autoResetButton = Instance.new("TextButton")
 autoResetButton.Size = UDim2.new(1, -20, 0, 26)
 autoResetButton.Position = UDim2.new(0, 10, 0, 82)
@@ -714,7 +723,7 @@ autoResetButton.Parent = mainFrame
 local autoResetBox = Instance.new("Frame")
 autoResetBox.Size = UDim2.new(0, 18, 0, 18)
 autoResetBox.Position = UDim2.new(0, 0, 0.5, -9)
-autoResetBox.BackgroundColor3 = Color3.fromRGB(255, 255, 255) -- Білий бокс
+autoResetBox.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
 autoResetBox.BorderSizePixel = 0
 autoResetBox.Parent = autoResetButton
 
@@ -725,7 +734,7 @@ arbCorner.Parent = autoResetBox
 autoResetBoxFill = Instance.new("Frame")
 autoResetBoxFill.Size = UDim2.new(1, -6, 1, -6)
 autoResetBoxFill.Position = UDim2.new(0, 3, 0, 3)
-autoResetBoxFill.BackgroundColor3 = Color3.fromRGB(255, 255, 255) -- Змінюється на зелений
+autoResetBoxFill.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
 autoResetBoxFill.BorderSizePixel = 0
 autoResetBoxFill.Parent = autoResetBox
 
@@ -754,7 +763,7 @@ autoResetButton.MouseButton1Click:Connect(function()
 
     autoResetEnabled = not autoResetEnabled
     if autoResetEnabled then
-        autoResetBoxFill.BackgroundColor3 = Color3.fromRGB(80, 220, 120) -- Зелений
+        autoResetBoxFill.BackgroundColor3 = Color3.fromRGB(80, 220, 120)
         safeZoneEnabled = false
         safeZoneBoxFill.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
         removeSafeZonePlatform()
@@ -763,7 +772,7 @@ autoResetButton.MouseButton1Click:Connect(function()
     end
 end)
 
--- 2. Safe Zone Чекбокс
+-- Safe Zone Чекбокс
 local safeZoneButton = Instance.new("TextButton")
 safeZoneButton.Size = UDim2.new(1, -20, 0, 26)
 safeZoneButton.Position = UDim2.new(0, 10, 0, 114)
@@ -814,7 +823,7 @@ safeZoneButton.MouseButton1Click:Connect(function()
 
     safeZoneEnabled = not safeZoneEnabled
     if safeZoneEnabled then
-        safeZoneBoxFill.BackgroundColor3 = Color3.fromRGB(80, 220, 120) -- Зелений
+        safeZoneBoxFill.BackgroundColor3 = Color3.fromRGB(80, 220, 120)
         autoResetEnabled = false
         autoResetBoxFill.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
         createSafeZone()
@@ -823,8 +832,6 @@ safeZoneButton.MouseButton1Click:Connect(function()
         removeSafeZonePlatform()
     end
 end)
-
--- ----------------------------------------------------
 
 local speedLabel = Instance.new("TextLabel")
 speedLabel.Size = UDim2.new(1, -20, 0, 20)
@@ -873,7 +880,7 @@ local roundCollectedLabel = Instance.new("TextLabel")
 roundCollectedLabel.Size = UDim2.new(1, -20, 0, 22)
 roundCollectedLabel.Position = UDim2.new(0, 10, 0, 216)
 roundCollectedLabel.BackgroundTransparency = 1
-roundCollectedLabel.Text = "Coins per round: 0/40"
+roundCollectedLabel.Text = "Coins per round: 0/0"
 roundCollectedLabel.TextColor3 = Color3.fromRGB(255, 220, 100)
 roundCollectedLabel.Font = Enum.Font.GothamBold
 roundCollectedLabel.TextSize = 12
@@ -917,7 +924,7 @@ task.spawn(function()
     while true do
         if isAutoFarmActive then
             statsLabel.Text = "Speed: " .. coinsPerHour .. "/h"
-            roundCollectedLabel.Text = "Coins per round: 0/" .. currentMatchCoins
+            roundCollectedLabel.Text = "Coins per round: " .. currentMatchCoins .. "/" .. maxMatchCoins
             totalCollectedLabel.Text = "Total collected: " .. sessionCoinsCollected
             
             local count = 0
@@ -936,7 +943,7 @@ task.spawn(function()
             end
         else
             statsLabel.Text = "Speed: 0/h"
-            roundCollectedLabel.Text = "Coins per round: 0/40"
+            roundCollectedLabel.Text = "Coins per round: 0/0"
             totalCollectedLabel.Text = "Total collected: 0"
             partnerLabel.Text = "Partners: 0"
             timerLabel.Text = "Time: 00:00"
