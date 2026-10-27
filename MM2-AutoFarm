@@ -29,6 +29,7 @@ local ignoredCoins = {}
 local autoResetEnabled = false
 local safeZoneEnabled = false
 local selectedPartners = {}
+local partnerHighlights = {} -- Зберігаємо підсвічування напарників
 
 local sessionCoinsCollected = 0
 local currentMatchCoins = 0
@@ -40,7 +41,6 @@ local previousCoinsValue = 0
 local hasReachedLimit = false
 local noclipConnection = nil
 
--- Змінна для статусу фарма
 local currentFarmStatus = "Idle"
 
 -- Anti-AFK
@@ -64,6 +64,35 @@ local function clearActiveHighlight()
     if activeHighlight then
         activeHighlight:Destroy()
         activeHighlight = nil
+    end
+end
+
+-- Управління підсвічуванням напарників
+local function updatePartnerHighlights()
+    -- Видаляємо старі підсвічування для гравців, яких прибрали з обраних
+    for player, highlight in pairs(partnerHighlights) do
+        if not selectedPartners[player] or not player.Character then
+            if highlight then highlight:Destroy() end
+            partnerHighlights[player] = nil
+        end
+    end
+
+    -- Додаємо або оновлюємо підсвічування для обраних
+    for _, player in pairs(selectedPartners) do
+        if player.Character and not partnerHighlights[player] then
+            local hl = Instance.new("Highlight")
+            hl.Name = "PartnerHighlight"
+            hl.FillColor = Color3.fromRGB(0, 150, 255)
+            hl.OutlineColor = Color3.fromRGB(255, 255, 255)
+            hl.FillTransparency = 0.4
+            hl.OutlineTransparency = 0
+            hl.Parent = player.Character
+            partnerHighlights[player] = hl
+        elseif player.Character and partnerHighlights[player] then
+            if partnerHighlights[player].Parent ~= player.Character then
+                partnerHighlights[player].Parent = player.Character
+            end
+        end
     end
 end
 
@@ -344,7 +373,6 @@ local function checkAndUpdateCoinsOnTouch()
             if hasPartners then
                 currentFarmStatus = "Waiting for Partner"
                 task.spawn(function()
-                    -- Перші 0.5 сек не реагуємо на ресет, щоб уникнути випадкового спрацювання
                     task.wait(0.5)
 
                     while isAutoFarmActive and safeZoneEnabled do
@@ -356,7 +384,6 @@ local function checkAndUpdateCoinsOnTouch()
                                 local partnerRoot = partner.Character.HumanoidRootPart
                                 local dist = (characterRoot.Position - partnerRoot.Position).Magnitude
                                 
-                                -- Перевіряємо що партнер в радіусі 100 студів ТА у нього теж повний мішок (або він різко перемістився на спавн)
                                 local partnerBagFull = false
                                 pcall(function()
                                     local pGui = partner.PlayerGui
@@ -407,6 +434,11 @@ local function stopAutoFarm()
     removeAntiAfk()
     removeAntiFling()
     
+    for _, hl in pairs(partnerHighlights) do
+        if hl then hl:Destroy() end
+    end
+    partnerHighlights = {}
+
     pcall(function()
         Workspace.FallenPartsDestroyHeight = -500
     end)
@@ -441,6 +473,8 @@ local function startAutoFarm()
 
     task.spawn(function()
         while isAutoFarmActive do
+            updatePartnerHighlights()
+
             if isBagFull() then
                 currentFarmStatus = "Waiting for Coins"
                 task.wait(0.5)
@@ -529,6 +563,11 @@ local function startAutoFarm()
             end
         end
 
+        for _, hl in pairs(partnerHighlights) do
+            if hl then hl:Destroy() end
+        end
+        partnerHighlights = {}
+
         pcall(function()
             Workspace.FallenPartsDestroyHeight = -500
         end)
@@ -551,7 +590,7 @@ screenGui.Parent = PlayerGui
 
 local mainFrame = Instance.new("Frame")
 mainFrame.Name = "MainFrame"
-mainFrame.Size = UDim2.new(0, 240, 0, 380) -- Збільшено висоту для нового статусу
+mainFrame.Size = UDim2.new(0, 240, 0, 380)
 mainFrame.Position = UDim2.new(0.5, -120, 0.4, -190)
 mainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
 mainFrame.BorderSizePixel = 0
@@ -564,7 +603,7 @@ uiCorner.Parent = mainFrame
 
 local playersFrame = Instance.new("Frame")
 playersFrame.Name = "PlayersFrame"
-playersFrame.Size = UDim2.new(0, 200, 0, 250)
+playersFrame.Size = UDim2.new(0, 220, 0, 250)
 playersFrame.Position = UDim2.new(1, 10, 0, 0)
 playersFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
 playersFrame.BorderSizePixel = 0
@@ -612,10 +651,20 @@ updatePlayerList = function()
             local pBtn = Instance.new("TextButton")
             pBtn.Size = UDim2.new(1, 0, 0, 25)
             pBtn.BackgroundColor3 = (selectedPartners[player]) and Color3.fromRGB(80, 180, 100) or Color3.fromRGB(50, 50, 55)
-            pBtn.Text = player.Name
+            
+            -- Вираховуємо відстань до гравця в метрах (m)
+            local distStr = "[ --m ]"
+            local char = LocalPlayer.Character
+            local pChar = player.Character
+            if char and char:FindFirstChild("HumanoidRootPart") and pChar and pChar:FindFirstChild("HumanoidRootPart") then
+                local dist = math.floor((char.HumanoidRootPart.Position - pChar.HumanoidRootPart.Position).Magnitude)
+                distStr = "[" .. dist .. "m]"
+            end
+            
+            pBtn.Text = player.Name .. "  " .. distStr
             pBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
             pBtn.Font = Enum.Font.Gotham
-            pBtn.TextSize = 12
+            pBtn.TextSize = 11
             pBtn.Parent = scrollingList
 
             local btnCorner = Instance.new("UICorner")
@@ -625,6 +674,10 @@ updatePlayerList = function()
             pBtn.MouseButton1Click:Connect(function()
                 if selectedPartners[player] then
                     selectedPartners[player] = nil
+                    if partnerHighlights[player] then
+                        partnerHighlights[player]:Destroy()
+                        partnerHighlights[player] = nil
+                    end
                 else
                     selectedPartners[player] = player
                 end
@@ -649,6 +702,10 @@ end
 Players.PlayerRemoving:Connect(function(player)
     if selectedPartners[player] then
         selectedPartners[player] = nil
+        if partnerHighlights[player] then
+            partnerHighlights[player]:Destroy()
+            partnerHighlights[player] = nil
+        end
         if playersFrame.Visible then
             updatePlayerList()
         end
@@ -964,7 +1021,6 @@ timerLabel.TextSize = 12
 timerLabel.TextXAlignment = Enum.TextXAlignment.Left
 timerLabel.Parent = mainFrame
 
--- Новий TextLabel для відображення статусу фарма
 local statusLabel = Instance.new("TextLabel")
 statusLabel.Size = UDim2.new(1, -20, 0, 22)
 statusLabel.Position = UDim2.new(0, 10, 0, 304)
@@ -997,6 +1053,11 @@ task.spawn(function()
                 timerLabel.Text = string.format("Time: %02d:%02d", minutes, seconds)
             else
                 timerLabel.Text = "Time: Waiting..."
+            end
+
+            -- Оновлюємо відстані у списку гравців, якщо він відкритий
+            if playersFrame.Visible then
+                updatePlayerList()
             end
         else
             statsLabel.Text = "Speed: 0/h"
