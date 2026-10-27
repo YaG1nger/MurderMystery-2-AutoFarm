@@ -1,0 +1,979 @@
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local VirtualUser = game:GetService("VirtualUser")
+
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+local ignoredNames = {
+    ["Camera"] = true,
+    ["Terrain"] = true,
+    ["GameSettings"] = true,
+    ["PetContainer"] = true,
+    ["WeaponDisplays"] = true,
+    ["LoadLobby"] = true,
+    ["ServerVersion"] = true,
+    ["StuckKnife"] = true,
+    ["RoundTimerPart"] = true,
+}
+
+local isAutoFarmActive = false
+local flySpeed = 22
+local currentTween = nil
+local activeHighlight = nil
+local ignoredCoins = {}
+
+local autoResetEnabled = false
+local safeZoneEnabled = false
+local safeZonePart = nil
+local selectedPartners = {}
+
+local sessionCoinsCollected = 0
+local currentMatchCoins = 0
+local coinsPerHour = 0
+local sessionStartTime = nil
+local isTimerRunning = false
+local previousCoinsValue = 0
+local hasReachedLimit = false
+
+-- Anti-AFK
+local antiAfkConnection
+local function setupAntiAfk()
+    if antiAfkConnection then return end
+    antiAfkConnection = LocalPlayer.Idled:Connect(function()
+        VirtualUser:CaptureController()
+        VirtualUser:ClickButton2(Vector2.new())
+    end)
+end
+
+local function removeAntiAfk()
+    if antiAfkConnection then
+        antiAfkConnection:Disconnect()
+        antiAfkConnection = nil
+    end
+end
+
+local function clearActiveHighlight()
+    if activeHighlight then
+        activeHighlight:Destroy()
+        activeHighlight = nil
+    end
+end
+
+local function setCharacterAnimations(enabled)
+    local character = LocalPlayer.Character
+    if character then
+        local animateScript = character:FindFirstChild("Animate")
+        if animateScript and animateScript:IsA("LocalScript") then
+            animateScript.Disabled = not enabled
+        end
+    end
+end
+
+local function removeSafeZonePlatform()
+    if safeZonePart then
+        safeZonePart:Destroy()
+        safeZonePart = nil
+    end
+end
+
+local function createSafeZone()
+    if not safeZonePart then
+        safeZonePart = Instance.new("Part")
+        safeZonePart.Size = Vector3.new(40, 1, 40)
+        safeZonePart.Position = Vector3.new(0, 10000, 0)
+        safeZonePart.Anchored = true
+        safeZonePart.BrickColor = BrickColor.new("Bright blue")
+        safeZonePart.Material = Enum.Material.SmoothPlastic
+        safeZonePart.Parent = Workspace
+    end
+end
+
+LocalPlayer.CharacterAdded:Connect(function(character)
+    local root = character:WaitForChild("HumanoidRootPart")
+    
+    local hasPartners = false
+    for _, _ in pairs(selectedPartners) do
+        hasPartners = true
+        break
+    end
+
+    if hasPartners then
+        safeZoneEnabled = true
+        autoResetEnabled = true
+        createSafeZone()
+    else
+        removeSafeZonePlatform()
+    end
+    
+    hasReachedLimit = false
+
+    if isAutoFarmActive then
+        task.wait(0.5)
+        setCharacterAnimations(false)
+        
+        if safeZoneEnabled then
+            createSafeZone()
+            root.CFrame = CFrame.new(0, 10005, 0)
+        end
+    end
+end)
+
+local function isCoinDisappearing(coinVisual)
+    if not coinVisual or not coinVisual.Parent then return true end
+    if coinVisual:IsA("BasePart") then
+        if coinVisual.Transparency > 0.5 or coinVisual.Size.Magnitude < 0.5 then
+            return true
+        end
+    end
+    return false
+end
+
+local function getKnifeThreatOffset(rootPart)
+    local threatOffset = Vector3.new(0, 0, 0)
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character then
+            local enemyChar = player.Character
+            local enemyRoot = enemyChar:FindFirstChild("HumanoidRootPart")
+            if enemyRoot then
+                local hasKnife = false
+                for _, item in ipairs(enemyChar:GetChildren()) do
+                    if item:IsA("Tool") and item.Name:lower():find("knife") then
+                        hasKnife = true
+                        break
+                    end
+                end
+                if hasKnife then
+                    local dist = (rootPart.Position - enemyRoot.Position).Magnitude
+                    if dist < 25 then
+                        local pushDir = (rootPart.Position - enemyRoot.Position).Unit
+                        threatOffset = threatOffset + (pushDir * 12)
+                    end
+                end
+            end
+        end
+    end
+    return threatOffset
+end
+
+local function isAnyCoinClose(rootPart)
+    for _, child in ipairs(Workspace:GetChildren()) do
+        if not ignoredNames[child.Name] and child:IsA("Model") then
+            local coinContainer = child:FindFirstChild("CoinContainer")
+            if coinContainer then
+                for _, coinServer in ipairs(coinContainer:GetChildren()) do
+                    if coinServer.Name == "Coin_Server" then
+                        local coinVisual = coinServer:FindFirstChild("CoinVisual")
+                        if coinVisual and not isCoinDisappearing(coinVisual) then
+                            local dist = (rootPart.Position - coinVisual.Position).Magnitude
+                            if dist <= 10 then
+                                return true
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return false
+end
+
+local function getClosestCoin()
+    local character = LocalPlayer.Character
+    if not character or not character:FindFirstChild("HumanoidRootPart") then return nil end
+    local rootPart = character.HumanoidRootPart
+
+    local closestCoin = nil
+    local shortestDistance = 1000
+
+    for _, child in ipairs(Workspace:GetChildren()) do
+        if not ignoredNames[child.Name] and child:IsA("Model") then
+            local coinContainer = child:FindFirstChild("CoinContainer")
+            if coinContainer then
+                for _, coinServer in ipairs(coinContainer:GetChildren()) do
+                    if coinServer.Name == "Coin_Server" then
+                        local coinVisual = coinServer:FindFirstChild("CoinVisual")
+                        if coinVisual and not ignoredCoins[coinServer] and not isCoinDisappearing(coinVisual) then
+                            local dist = (rootPart.Position - coinVisual.Position).Magnitude
+                            if dist < shortestDistance then
+                                shortestDistance = dist
+                                closestCoin = coinVisual
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return closestCoin
+end
+
+local function getRealGameCoins()
+    local total = 0
+    pcall(function()
+        local mainGui = PlayerGui:FindFirstChild("MainGUI")
+        if not mainGui then return end
+        local gameGui = mainGui:FindFirstChild("Game")
+        if not gameGui then return end
+        local coinBags = gameGui:FindFirstChild("CoinBags")
+        if not coinBags then return end
+        local container = coinBags:FindFirstChild("Container")
+        if not container then return end
+
+        for _, itemFolder in ipairs(container:GetChildren()) do
+            local currencyFrame = itemFolder:FindFirstChild("CurrencyFrame")
+            if currencyFrame then
+                local icon = currencyFrame:FindFirstChild("Icon")
+                local coinsObj = (icon and icon:FindFirstChild("Coins")) or currencyFrame:FindFirstChild("Coins")
+                
+                if coinsObj then
+                    local textValue = ""
+                    if coinsObj:IsA("TextLabel") or coinsObj:IsA("TextBox") then
+                        textValue = coinsObj.Text
+                    else
+                        local label = coinsObj:FindFirstChildWhichIsA("TextLabel", true)
+                        if label then textValue = label.Text end
+                    end
+                    local num = tonumber(textValue)
+                    if num then total = total + num end
+                end
+            end
+        end
+    end)
+    return total
+end
+
+local function areCoinsLeftOnMap()
+    local found = false
+    pcall(function()
+        for _, child in ipairs(Workspace:GetChildren()) do
+            if not ignoredNames[child.Name] and child:IsA("Model") then
+                local coinContainer = child:FindFirstChild("CoinContainer")
+                if coinContainer then
+                    for _, coinServer in ipairs(coinContainer:GetChildren()) do
+                        if coinServer.Name == "Coin_Server" then
+                            local coinVisual = coinServer:FindFirstChild("CoinVisual")
+                            if coinVisual and not isCoinDisappearing(coinVisual) then
+                                found = true
+                                break
+                            end
+                        end
+                    end
+                end
+            end
+            if found then break end
+        end
+    end)
+    return found
+end
+
+local function checkAndUpdateCoinsOnTouch()
+    local newCoins = getRealGameCoins()
+    
+    if newCoins > previousCoinsValue then
+        local added = newCoins - previousCoinsValue
+        sessionCoinsCollected = sessionCoinsCollected + added
+        currentMatchCoins = newCoins
+        previousCoinsValue = newCoins
+
+        if not isTimerRunning then
+            isTimerRunning = true
+            sessionStartTime = tick()
+        end
+
+        local elapsed = tick() - sessionStartTime
+        if elapsed > 0.1 and sessionCoinsCollected > 0 then
+            coinsPerHour = math.floor((sessionCoinsCollected / elapsed) * 3600)
+        end
+
+        if currentMatchCoins >= 40 and not areCoinsLeftOnMap() and not hasReachedLimit then
+            hasReachedLimit = true
+            local character = LocalPlayer.Character
+            local root = character and character:FindFirstChild("HumanoidRootPart")
+
+            if safeZoneEnabled and root then
+                createSafeZone()
+                root.CFrame = CFrame.new(0, 10005, 0)
+
+                task.spawn(function()
+                    while isAutoFarmActive and safeZoneEnabled do
+                        local allPartnersReady = true
+                        for _, partner in pairs(selectedPartners) do
+                            if partner and partner.Character and partner.Character:FindFirstChild("HumanoidRootPart") then
+                                local partnerRoot = partner.Character.HumanoidRootPart
+                                local dist = (Vector3.new(0, 10000, 0) - partnerRoot.Position).Magnitude
+                                if dist > 100 then
+                                    allPartnersReady = false
+                                    break
+                                end
+                            else
+                                allPartnersReady = true
+                            end
+                        end
+
+                        if allPartnersReady then
+                            task.wait(0.5)
+                            if character and character:FindFirstChild("Humanoid") then
+                                character:BreakJoints()
+                            end
+                            break
+                        end
+                        task.wait(1)
+                    end
+                end)
+            elseif autoResetEnabled and character then
+                character:BreakJoints()
+            end
+        end
+    elseif newCoins < previousCoinsValue then
+        currentMatchCoins = newCoins
+        previousCoinsValue = newCoins
+        hasReachedLimit = false
+    end
+end
+
+local function stopAutoFarm()
+    isAutoFarmActive = false
+    coinsPerHour = 0
+    isTimerRunning = false
+    sessionStartTime = nil
+    hasReachedLimit = false
+    
+    removeAntiAfk()
+    
+    local hasPartners = false
+    for _, _ in pairs(selectedPartners) do
+        hasPartners = true
+        break
+    end
+    if not hasPartners then
+        removeSafeZonePlatform()
+    end
+    
+    pcall(function()
+        Workspace.FallenPartsDestroyHeight = -500
+    end)
+    
+    if currentTween then
+        currentTween:Cancel()
+        currentTween = nil
+    end
+    clearActiveHighlight()
+    setCharacterAnimations(true)
+    
+    local character = LocalPlayer.Character
+    if character and character:FindFirstChild("HumanoidRootPart") then
+        character.HumanoidRootPart.Anchored = false
+    end
+end
+
+local function startAutoFarm()
+    setupAntiAfk()
+    
+    lastObservedGameCoins = getRealGameCoins()
+    currentMatchCoins = lastObservedGameCoins
+    sessionCoinsCollected = 0
+    isTimerRunning = false
+    sessionStartTime = nil
+    hasReachedLimit = false
+
+    pcall(function()
+        Workspace.FallenPartsDestroyHeight = 0/0
+    end)
+
+    setCharacterAnimations(false)
+
+    task.spawn(function()
+        while isAutoFarmActive do
+            local character = LocalPlayer.Character
+            if not character or not character:FindFirstChild("HumanoidRootPart") then
+                task.wait(0.2)
+                continue
+            end
+            local rootPart = character.HumanoidRootPart
+
+            local targetCoinVisual = getClosestCoin()
+
+            if targetCoinVisual and targetCoinVisual:IsDescendantOf(Workspace) then
+                local parentCoinServer = targetCoinVisual.Parent
+                if parentCoinServer then
+                    ignoredCoins[parentCoinServer] = true
+                    task.delay(3, function() ignoredCoins[parentCoinServer] = nil end)
+                end
+
+                if not isAnyCoinClose(rootPart) then
+                    rootPart.Anchored = true
+                end
+
+                clearActiveHighlight()
+                activeHighlight = Instance.new("Highlight")
+                activeHighlight.Name = "TargetCoinHighlight"
+                activeHighlight.FillColor = Color3.fromRGB(0, 255, 255)
+                activeHighlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+                activeHighlight.FillTransparency = 0.2
+                activeHighlight.OutlineTransparency = 0
+                activeHighlight.Parent = targetCoinVisual
+
+                local threatOffset = getKnifeThreatOffset(rootPart)
+                local targetCFrame = CFrame.new(targetCoinVisual.Position + threatOffset)
+
+                local distance = (rootPart.Position - targetCFrame.Position).Magnitude
+                local duration = distance / flySpeed
+                local currentRotation = rootPart.CFrame - rootPart.Position
+
+                local tweenInfo = TweenInfo.new(duration, Enum.EasingStyle.Linear)
+                currentTween = TweenService:Create(rootPart, tweenInfo, {CFrame = targetCFrame * currentRotation})
+                currentTween:Play()
+
+                while currentTween and currentTween.PlaybackState == Enum.PlaybackState.Playing do
+                    if isAnyCoinClose(rootPart) then
+                        rootPart.Anchored = false
+                    else
+                        rootPart.Anchored = true
+                    end
+
+                    local betterCoin = getClosestCoin()
+                    if betterCoin and betterCoin ~= targetCoinVisual then
+                        local currentDist = (rootPart.Position - targetCoinVisual.Position).Magnitude
+                        local newDist = (rootPart.Position - betterCoin.Position).Magnitude
+                        if newDist < currentDist - 2 then
+                            currentTween:Cancel()
+                            currentTween = nil
+                            break
+                        end
+                    end
+
+                    if not targetCoinVisual or not targetCoinVisual:IsDescendantOf(Workspace) or isCoinDisappearing(targetCoinVisual) or not isAutoFarmActive then
+                        currentTween:Cancel()
+                        currentTween = nil
+                        break
+                    end
+                    task.wait(0.03)
+                end
+
+                checkAndUpdateCoinsOnTouch()
+                clearActiveHighlight()
+            else
+                rootPart.Anchored = false
+                task.wait(0.2)
+            end
+        end
+
+        local hasPartners = false
+        for _, _ in pairs(selectedPartners) do
+            hasPartners = true
+            break
+        end
+        if not hasPartners then
+            removeSafeZonePlatform()
+        end
+
+        pcall(function()
+            Workspace.FallenPartsDestroyHeight = -500
+        end)
+
+        local character = LocalPlayer.Character
+        if character and character:FindFirstChild("HumanoidRootPart") then
+            character.HumanoidRootPart.Anchored = false
+        end
+        clearActiveHighlight()
+        setCharacterAnimations(true)
+    end)
+end
+
+-- ================= ІНТЕРФЕЙС (ENGLISH VERSION) =================
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "CoinFarmMenu"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = PlayerGui
+
+local mainFrame = Instance.new("Frame")
+mainFrame.Name = "MainFrame"
+mainFrame.Size = UDim2.new(0, 240, 0, 355)
+mainFrame.Position = UDim2.new(0.5, -120, 0.4, -177)
+mainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+mainFrame.BorderSizePixel = 0
+mainFrame.Active = true
+mainFrame.Parent = screenGui
+
+local uiCorner = Instance.new("UICorner")
+uiCorner.CornerRadius = UDim.new(0, 10)
+uiCorner.Parent = mainFrame
+
+local playersFrame = Instance.new("Frame")
+playersFrame.Name = "PlayersFrame"
+playersFrame.Size = UDim2.new(0, 200, 0, 250)
+playersFrame.Position = UDim2.new(1, 10, 0, 0)
+playersFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
+playersFrame.BorderSizePixel = 0
+playersFrame.Visible = false
+playersFrame.Parent = mainFrame
+
+local pfCorner = Instance.new("UICorner")
+pfCorner.CornerRadius = UDim.new(0, 10)
+pfCorner.Parent = playersFrame
+
+local pfTitle = Instance.new("TextLabel")
+pfTitle.Size = UDim2.new(1, 0, 0, 30)
+pfTitle.BackgroundTransparency = 1
+pfTitle.Text = "Select Partners"
+pfTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+pfTitle.Font = Enum.Font.GothamBold
+pfTitle.TextSize = 13
+pfTitle.Parent = playersFrame
+
+local scrollingList = Instance.new("ScrollingFrame")
+scrollingList.Size = UDim2.new(1, -10, 1, -40)
+scrollingList.Position = UDim2.new(0, 5, 0, 35)
+scrollingList.BackgroundTransparency = 1
+scrollingList.CanvasSize = UDim2.new(0, 0, 0, 0)
+scrollingList.AutomaticCanvasSize = Enum.AutomaticSize.Y
+scrollingList.Parent = playersFrame
+
+local uiListLayout = Instance.new("UIListLayout")
+uiListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+uiListLayout.Padding = UDim.new(0, 5)
+uiListLayout.Parent = scrollingList
+
+local autoResetBoxFill, safeZoneBoxFill
+
+local function updatePlayerList()
+    for _, child in ipairs(scrollingList:GetChildren()) do
+        if child:IsA("TextButton") then
+            child:Destroy()
+        end
+    end
+
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            local pBtn = Instance.new("TextButton")
+            pBtn.Size = UDim2.new(1, 0, 0, 25)
+            pBtn.BackgroundColor3 = (selectedPartners[player]) and Color3.fromRGB(80, 180, 100) or Color3.fromRGB(50, 50, 55)
+            pBtn.Text = player.Name
+            pBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+            pBtn.Font = Enum.Font.Gotham
+            pBtn.TextSize = 12
+            pBtn.Parent = scrollingList
+
+            local btnCorner = Instance.new("UICorner")
+            btnCorner.CornerRadius = UDim.new(0, 4)
+            btnCorner.Parent = pBtn
+
+            pBtn.MouseButton1Click:Connect(function()
+                if selectedPartners[player] then
+                    selectedPartners[player] = nil
+                else
+                    selectedPartners[player] = player
+                end
+
+                local hasPartners = false
+                for _, _ in pairs(selectedPartners) do
+                    hasPartners = true
+                    break
+                end
+
+                if hasPartners then
+                    autoResetEnabled = true
+                    safeZoneEnabled = true
+                    autoResetBoxFill.BackgroundColor3 = Color3.fromRGB(80, 220, 120)
+                    safeZoneBoxFill.BackgroundColor3 = Color3.fromRGB(80, 220, 120)
+                    createSafeZone()
+                else
+                    removeSafeZonePlatform()
+                end
+
+                updatePlayerList()
+            end)
+        end
+    end
+end
+
+-- Top Bar (Dragging)
+local topBar = Instance.new("Frame")
+topBar.Size = UDim2.new(1, 0, 0, 35)
+topBar.BackgroundTransparency = 1
+topBar.Active = true
+topBar.Parent = mainFrame
+
+local dragging = false
+local dragStart, startPos
+
+topBar.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        dragStart = input.Position
+        startPos = mainFrame.Position
+        
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                dragging = false
+            end
+        end)
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+        local delta = input.Position - dragStart
+        mainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+end)
+
+local titleLabel = Instance.new("TextLabel")
+titleLabel.Size = UDim2.new(1, -70, 1, 0)
+titleLabel.Position = UDim2.new(0, 10, 0, 0)
+titleLabel.BackgroundTransparency = 1
+titleLabel.Text = "Coin Auto Farm"
+titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+titleLabel.TextSize = 15
+titleLabel.Font = Enum.Font.GothamBold
+titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+titleLabel.Parent = topBar
+
+local partnerListBtn = Instance.new("TextButton")
+partnerListBtn.Size = UDim2.new(0, 24, 0, 24)
+partnerListBtn.Position = UDim2.new(1, -58, 0, 6)
+partnerListBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 50)
+partnerListBtn.Text = "👥"
+partnerListBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
+partnerListBtn.Font = Enum.Font.GothamBold
+partnerListBtn.TextSize = 12
+partnerListBtn.Parent = topBar
+
+local plCorner = Instance.new("UICorner")
+plCorner.CornerRadius = UDim.new(0, 6)
+plCorner.Parent = partnerListBtn
+
+partnerListBtn.MouseButton1Click:Connect(function()
+    playersFrame.Visible = not playersFrame.Visible
+    if playersFrame.Visible then
+        updatePlayerList()
+    end
+end)
+
+local closeBtn = Instance.new("TextButton")
+closeBtn.Size = UDim2.new(0, 24, 0, 24)
+closeBtn.Position = UDim2.new(1, -30, 0, 6)
+closeBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 50)
+closeBtn.Text = "X"
+closeBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
+closeBtn.Font = Enum.Font.GothamBold
+closeBtn.TextSize = 14
+closeBtn.Parent = topBar
+
+local closeCorner = Instance.new("UICorner")
+closeCorner.CornerRadius = UDim.new(0, 6)
+closeCorner.Parent = closeBtn
+
+closeBtn.MouseButton1Click:Connect(function()
+    stopAutoFarm()
+    screenGui:Destroy()
+end)
+
+local toggleBtn = Instance.new("TextButton")
+toggleBtn.Size = UDim2.new(1, -20, 0, 32)
+toggleBtn.Position = UDim2.new(0, 10, 0, 42)
+toggleBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 50)
+toggleBtn.Text = "Auto Farm: OFF"
+toggleBtn.TextColor3 = Color3.fromRGB(220, 80, 80)
+toggleBtn.Font = Enum.Font.GothamMedium
+toggleBtn.TextSize = 13
+toggleBtn.Parent = mainFrame
+
+local toggleCorner = Instance.new("UICorner")
+toggleCorner.CornerRadius = UDim.new(0, 6)
+toggleCorner.Parent = toggleBtn
+
+toggleBtn.MouseButton1Click:Connect(function()
+    isAutoFarmActive = not isAutoFarmActive
+    if isAutoFarmActive then
+        toggleBtn.Text = "Auto Farm: ON"
+        toggleBtn.TextColor3 = Color3.fromRGB(80, 220, 120)
+        startAutoFarm()
+    else
+        toggleBtn.Text = "Auto Farm: OFF"
+        toggleBtn.TextColor3 = Color3.fromRGB(220, 80, 80)
+        stopAutoFarm()
+    end
+end)
+
+-- ---- Секція для білих боксів-галочок (Checkbox UI) ----
+
+-- 1. Auto Reset Чекбокс
+local autoResetButton = Instance.new("TextButton")
+autoResetButton.Size = UDim2.new(1, -20, 0, 26)
+autoResetButton.Position = UDim2.new(0, 10, 0, 82)
+autoResetButton.BackgroundTransparency = 1
+autoResetButton.Text = ""
+autoResetButton.Parent = mainFrame
+
+local autoResetBox = Instance.new("Frame")
+autoResetBox.Size = UDim2.new(0, 18, 0, 18)
+autoResetBox.Position = UDim2.new(0, 0, 0.5, -9)
+autoResetBox.BackgroundColor3 = Color3.fromRGB(255, 255, 255) -- Білий бокс
+autoResetBox.BorderSizePixel = 0
+autoResetBox.Parent = autoResetButton
+
+local arbCorner = Instance.new("UICorner")
+arbCorner.CornerRadius = UDim.new(0, 4)
+arbCorner.Parent = autoResetBox
+
+autoResetBoxFill = Instance.new("Frame")
+autoResetBoxFill.Size = UDim2.new(1, -6, 1, -6)
+autoResetBoxFill.Position = UDim2.new(0, 3, 0, 3)
+autoResetBoxFill.BackgroundColor3 = Color3.fromRGB(255, 255, 255) -- Змінюється на зелений
+autoResetBoxFill.BorderSizePixel = 0
+autoResetBoxFill.Parent = autoResetBox
+
+local arbfCorner = Instance.new("UICorner")
+arbfCorner.CornerRadius = UDim.new(0, 2)
+arbfCorner.Parent = autoResetBoxFill
+
+local autoResetLabel = Instance.new("TextLabel")
+autoResetLabel.Size = UDim2.new(1, -25, 1, 0)
+autoResetLabel.Position = UDim2.new(0, 25, 0, 0)
+autoResetLabel.BackgroundTransparency = 1
+autoResetLabel.Text = "Auto Reset"
+autoResetLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+autoResetLabel.Font = Enum.Font.Gotham
+autoResetLabel.TextSize = 12
+autoResetLabel.TextXAlignment = Enum.TextXAlignment.Left
+autoResetLabel.Parent = autoResetButton
+
+autoResetButton.MouseButton1Click:Connect(function()
+    local hasPartners = false
+    for _, _ in pairs(selectedPartners) do
+        hasPartners = true
+        break
+    end
+    if hasPartners then return end
+
+    autoResetEnabled = not autoResetEnabled
+    if autoResetEnabled then
+        autoResetBoxFill.BackgroundColor3 = Color3.fromRGB(80, 220, 120) -- Зелений
+        safeZoneEnabled = false
+        safeZoneBoxFill.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        removeSafeZonePlatform()
+    else
+        autoResetBoxFill.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    end
+end)
+
+-- 2. Safe Zone Чекбокс
+local safeZoneButton = Instance.new("TextButton")
+safeZoneButton.Size = UDim2.new(1, -20, 0, 26)
+safeZoneButton.Position = UDim2.new(0, 10, 0, 114)
+safeZoneButton.BackgroundTransparency = 1
+safeZoneButton.Text = ""
+safeZoneButton.Parent = mainFrame
+
+local safeZoneBox = Instance.new("Frame")
+safeZoneBox.Size = UDim2.new(0, 18, 0, 18)
+safeZoneBox.Position = UDim2.new(0, 0, 0.5, -9)
+safeZoneBox.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+safeZoneBox.BorderSizePixel = 0
+safeZoneBox.Parent = safeZoneButton
+
+local szbCorner = Instance.new("UICorner")
+szbCorner.CornerRadius = UDim.new(0, 4)
+szbCorner.Parent = safeZoneBox
+
+safeZoneBoxFill = Instance.new("Frame")
+safeZoneBoxFill.Size = UDim2.new(1, -6, 1, -6)
+safeZoneBoxFill.Position = UDim2.new(0, 3, 0, 3)
+safeZoneBoxFill.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+safeZoneBoxFill.BorderSizePixel = 0
+safeZoneBoxFill.Parent = safeZoneBox
+
+local szbfCorner = Instance.new("UICorner")
+szbfCorner.CornerRadius = UDim.new(0, 2)
+szbfCorner.Parent = safeZoneBoxFill
+
+local safeZoneLabel = Instance.new("TextLabel")
+safeZoneLabel.Size = UDim2.new(1, -25, 1, 0)
+safeZoneLabel.Position = UDim2.new(0, 25, 0, 0)
+safeZoneLabel.BackgroundTransparency = 1
+safeZoneLabel.Text = "Safe Zone"
+safeZoneLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+safeZoneLabel.Font = Enum.Font.Gotham
+safeZoneLabel.TextSize = 12
+safeZoneLabel.TextXAlignment = Enum.TextXAlignment.Left
+safeZoneLabel.Parent = safeZoneButton
+
+safeZoneButton.MouseButton1Click:Connect(function()
+    local hasPartners = false
+    for _, _ in pairs(selectedPartners) do
+        hasPartners = true
+        break
+    end
+    if hasPartners then return end
+
+    safeZoneEnabled = not safeZoneEnabled
+    if safeZoneEnabled then
+        safeZoneBoxFill.BackgroundColor3 = Color3.fromRGB(80, 220, 120) -- Зелений
+        autoResetEnabled = false
+        autoResetBoxFill.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        createSafeZone()
+    else
+        safeZoneBoxFill.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        removeSafeZonePlatform()
+    end
+end)
+
+-- ----------------------------------------------------
+
+local speedLabel = Instance.new("TextLabel")
+speedLabel.Size = UDim2.new(1, -20, 0, 20)
+speedLabel.Position = UDim2.new(0, 10, 0, 148)
+speedLabel.BackgroundTransparency = 1
+speedLabel.Text = "Flight Speed: 22"
+speedLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+speedLabel.Font = Enum.Font.Gotham
+speedLabel.TextSize = 12
+speedLabel.TextXAlignment = Enum.TextXAlignment.Left
+speedLabel.Parent = mainFrame
+
+local sliderBackground = Instance.new("Frame")
+sliderBackground.Size = UDim2.new(1, -20, 0, 10)
+sliderBackground.Position = UDim2.new(0, 10, 0, 172)
+sliderBackground.BackgroundColor3 = Color3.fromRGB(50, 50, 55)
+sliderBackground.BorderSizePixel = 0
+sliderBackground.Parent = mainFrame
+
+local sliderCorner = Instance.new("UICorner")
+sliderCorner.CornerRadius = UDim.new(0, 5)
+sliderCorner.Parent = sliderBackground
+
+local sliderFill = Instance.new("Frame")
+sliderFill.Size = UDim2.new((22 - 10)/(30 - 10), 0, 1, 0)
+sliderFill.BackgroundColor3 = Color3.fromRGB(255, 200, 50)
+sliderFill.BorderSizePixel = 0
+sliderFill.Parent = sliderBackground
+
+local fillCorner = Instance.new("UICorner")
+fillCorner.CornerRadius = UDim.new(0, 5)
+fillCorner.Parent = sliderFill
+
+local statsLabel = Instance.new("TextLabel")
+statsLabel.Size = UDim2.new(1, -20, 0, 22)
+statsLabel.Position = UDim2.new(0, 10, 0, 192)
+statsLabel.BackgroundTransparency = 1
+statsLabel.Text = "Speed: 0/h"
+statsLabel.TextColor3 = Color3.fromRGB(100, 220, 255)
+statsLabel.Font = Enum.Font.GothamBold
+statsLabel.TextSize = 12
+statsLabel.TextXAlignment = Enum.TextXAlignment.Left
+statsLabel.Parent = mainFrame
+
+local roundCollectedLabel = Instance.new("TextLabel")
+roundCollectedLabel.Size = UDim2.new(1, -20, 0, 22)
+roundCollectedLabel.Position = UDim2.new(0, 10, 0, 216)
+roundCollectedLabel.BackgroundTransparency = 1
+roundCollectedLabel.Text = "Coins per round: 0/40"
+roundCollectedLabel.TextColor3 = Color3.fromRGB(255, 220, 100)
+roundCollectedLabel.Font = Enum.Font.GothamBold
+roundCollectedLabel.TextSize = 12
+roundCollectedLabel.TextXAlignment = Enum.TextXAlignment.Left
+roundCollectedLabel.Parent = mainFrame
+
+local totalCollectedLabel = Instance.new("TextLabel")
+totalCollectedLabel.Size = UDim2.new(1, -20, 0, 22)
+totalCollectedLabel.Position = UDim2.new(0, 10, 0, 238)
+totalCollectedLabel.BackgroundTransparency = 1
+totalCollectedLabel.Text = "Total collected: 0"
+totalCollectedLabel.TextColor3 = Color3.fromRGB(150, 255, 150)
+totalCollectedLabel.Font = Enum.Font.GothamBold
+totalCollectedLabel.TextSize = 12
+totalCollectedLabel.TextXAlignment = Enum.TextXAlignment.Left
+totalCollectedLabel.Parent = mainFrame
+
+local partnerLabel = Instance.new("TextLabel")
+partnerLabel.Size = UDim2.new(1, -20, 0, 22)
+partnerLabel.Position = UDim2.new(0, 10, 0, 260)
+partnerLabel.BackgroundTransparency = 1
+partnerLabel.Text = "Partners: 0"
+partnerLabel.TextColor3 = Color3.fromRGB(200, 150, 255)
+partnerLabel.Font = Enum.Font.GothamBold
+partnerLabel.TextSize = 11
+partnerLabel.TextXAlignment = Enum.TextXAlignment.Left
+partnerLabel.Parent = mainFrame
+
+local timerLabel = Instance.new("TextLabel")
+timerLabel.Size = UDim2.new(1, -20, 0, 22)
+timerLabel.Position = UDim2.new(0, 10, 0, 282)
+timerLabel.BackgroundTransparency = 1
+timerLabel.Text = "Time: 00:00"
+timerLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+timerLabel.Font = Enum.Font.GothamBold
+timerLabel.TextSize = 12
+timerLabel.TextXAlignment = Enum.TextXAlignment.Left
+timerLabel.Parent = mainFrame
+
+task.spawn(function()
+    while true do
+        if isAutoFarmActive then
+            statsLabel.Text = "Speed: " .. coinsPerHour .. "/h"
+            roundCollectedLabel.Text = "Coins per round: 0/" .. currentMatchCoins
+            totalCollectedLabel.Text = "Total collected: " .. sessionCoinsCollected
+            
+            local count = 0
+            for _, _ in pairs(selectedPartners) do
+                count = count + 1
+            end
+            partnerLabel.Text = "Partners: " .. count
+            
+            if isTimerRunning and sessionStartTime then
+                local elapsed = math.floor(tick() - sessionStartTime)
+                local minutes = math.floor(elapsed / 60)
+                local seconds = elapsed % 60
+                timerLabel.Text = string.format("Time: %02d:%02d", minutes, seconds)
+            else
+                timerLabel.Text = "Time: Waiting..."
+            end
+        else
+            statsLabel.Text = "Speed: 0/h"
+            roundCollectedLabel.Text = "Coins per round: 0/40"
+            totalCollectedLabel.Text = "Total collected: 0"
+            partnerLabel.Text = "Partners: 0"
+            timerLabel.Text = "Time: 00:00"
+        end
+        task.wait(1)
+    end
+end)
+
+local isDraggingSlider = false
+
+local function updateSlider(input)
+    local minSpeed = 10
+    local maxSpeed = 30
+    local posX = math.clamp(input.Position.X - sliderBackground.AbsolutePosition.X, 0, sliderBackground.AbsoluteSize.X)
+    local scale = posX / sliderBackground.AbsoluteSize.X
+    
+    flySpeed = math.floor(minSpeed + scale * (maxSpeed - minSpeed))
+    speedLabel.Text = "Flight Speed: " .. flySpeed
+    sliderFill.Size = UDim2.new(scale, 0, 1, 0)
+end
+
+sliderBackground.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        isDraggingSlider = true
+        dragging = false
+        updateSlider(input)
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        isDraggingSlider = false
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if isDraggingSlider and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+        updateSlider(input)
+    end
+end)
