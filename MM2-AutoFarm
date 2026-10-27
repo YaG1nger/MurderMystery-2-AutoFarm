@@ -83,7 +83,7 @@ end
 -- Створення платформи по центру workspace.Lobby + 100 студів вгору
 local function createSafeZone()
     if not safeZonePart then
-        local centerPosition = Vector3.new(0, 10000, 0) -- Запасна позиція, якщо Lobby не знайдено
+        local centerPosition = Vector3.new(0, 10000, 0)
         
         pcall(function()
             local lobbyModel = Workspace:FindFirstChild("Lobby")
@@ -96,7 +96,6 @@ local function createSafeZone()
         safeZonePart = Instance.new("Part")
         safeZonePart.Shape = Enum.PartType.Cylinder
         safeZonePart.Size = Vector3.new(1, 50, 50)
-        -- Ставимо в центр лоббі і піднімаємо на 100 студів вгору по Y
         safeZonePart.Position = Vector3.new(centerPosition.X, centerPosition.Y + 100, centerPosition.Z)
         safeZonePart.Orientation = Vector3.new(0, 0, 90)
         safeZonePart.Anchored = true
@@ -106,7 +105,6 @@ local function createSafeZone()
     end
 end
 
--- Отримання точної позиції платформи для телепортації гравця на 2 студа вище
 local function getSafeZoneTeleportCFrame()
     if safeZonePart then
         return CFrame.new(safeZonePart.Position + Vector3.new(0, 2, 0))
@@ -142,7 +140,7 @@ LocalPlayer.CharacterAdded:Connect(function(character)
     end
 end)
 
-local functionኮ isCoinDisappearing(coinVisual)
+local function isCoinDisappearing(coinVisual)
     if not coinVisual or not coinVisual.Parent then return true end
     if coinVisual:IsA("BasePart") then
         if coinVisual.Transparency > 0.5 or coinVisual.Size.Magnitude < 0.5 then
