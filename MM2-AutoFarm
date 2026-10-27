@@ -29,7 +29,7 @@ local ignoredCoins = {}
 local autoResetEnabled = false
 local safeZoneEnabled = false
 local selectedPartners = {}
-local partnerHighlights = {} -- Зберігаємо підсвічування напарників
+local partnerHighlights = {}
 
 local sessionCoinsCollected = 0
 local currentMatchCoins = 0
@@ -40,7 +40,6 @@ local isTimerRunning = false
 local previousCoinsValue = 0
 local hasReachedLimit = false
 local noclipConnection = nil
-
 local currentFarmStatus = "Idle"
 
 -- Anti-AFK
@@ -67,34 +66,48 @@ local function clearActiveHighlight()
     end
 end
 
--- Управління підсвічуванням напарників
+-- Функція оновлення фіолетового підсвічування партнерів
 local function updatePartnerHighlights()
-    -- Видаляємо старі підсвічування для гравців, яких прибрали з обраних
-    for player, highlight in pairs(partnerHighlights) do
-        if not selectedPartners[player] or not player.Character then
-            if highlight then highlight:Destroy() end
-            partnerHighlights[player] = nil
-        end
+    -- Видаляємо всі старі підсвічування
+    for player, h in pairs(partnerHighlights) do
+        if h then h:Destroy() end
     end
+    partnerHighlights = {}
 
-    -- Додаємо або оновлюємо підсвічування для обраних
-    for _, player in pairs(selectedPartners) do
-        if player.Character and not partnerHighlights[player] then
+    -- Створюємо нові для всіх вибраних партнерів
+    for _, partner in pairs(selectedPartners) do
+        if partner and partner.Character then
+            local char = partner.Character
             local hl = Instance.new("Highlight")
             hl.Name = "PartnerHighlight"
-            hl.FillColor = Color3.fromRGB(0, 150, 255)
+            hl.FillColor = Color3.fromRGB(160, 50, 255) -- Фіолетовий колір
             hl.OutlineColor = Color3.fromRGB(255, 255, 255)
             hl.FillTransparency = 0.4
             hl.OutlineTransparency = 0
-            hl.Parent = player.Character
-            partnerHighlights[player] = hl
-        elseif player.Character and partnerHighlights[player] then
-            if partnerHighlights[player].Parent ~= player.Character then
-                partnerHighlights[player].Parent = player.Character
-            end
+            hl.Parent = char
+            partnerHighlights[partner] = hl
         end
     end
 end
+
+-- Стежимо за тим, щоб підсвічування оновлювалося, якщо партнер респавниться
+for _, player in ipairs(Players:GetPlayers()) do
+    player.CharacterAdded:Connect(function(char)
+        task.wait(0.5)
+        if selectedPartners[player] then
+            updatePartnerHighlights()
+        end
+    end)
+end
+
+Players.PlayerAdded:Connect(function(player)
+    player.CharacterAdded:Connect(function(char)
+        task.wait(0.5)
+        if selectedPartners[player] then
+            updatePartnerHighlights()
+        end
+    end)
+end)
 
 local function setCharacterAnimations(enabled)
     local character = LocalPlayer.Character
@@ -106,7 +119,6 @@ local function setCharacterAnimations(enabled)
     end
 end
 
--- Захист від флінгу
 local function setupAntiFling()
     if noclipConnection then return end
     noclipConnection = RunService.Stepped:Connect(function()
@@ -163,6 +175,8 @@ LocalPlayer.CharacterAdded:Connect(function(character)
     if hasPartners then
         safeZoneEnabled = true
         autoResetEnabled = true
+        task.wait(0.5)
+        updatePartnerHighlights()
     end
     
     hasReachedLimit = false
@@ -434,11 +448,6 @@ local function stopAutoFarm()
     removeAntiAfk()
     removeAntiFling()
     
-    for _, hl in pairs(partnerHighlights) do
-        if hl then hl:Destroy() end
-    end
-    partnerHighlights = {}
-
     pcall(function()
         Workspace.FallenPartsDestroyHeight = -500
     end)
@@ -473,8 +482,6 @@ local function startAutoFarm()
 
     task.spawn(function()
         while isAutoFarmActive do
-            updatePartnerHighlights()
-
             if isBagFull() then
                 currentFarmStatus = "Waiting for Coins"
                 task.wait(0.5)
@@ -563,11 +570,6 @@ local function startAutoFarm()
             end
         end
 
-        for _, hl in pairs(partnerHighlights) do
-            if hl then hl:Destroy() end
-        end
-        partnerHighlights = {}
-
         pcall(function()
             Workspace.FallenPartsDestroyHeight = -500
         end)
@@ -603,7 +605,7 @@ uiCorner.Parent = mainFrame
 
 local playersFrame = Instance.new("Frame")
 playersFrame.Name = "PlayersFrame"
-playersFrame.Size = UDim2.new(0, 220, 0, 250)
+playersFrame.Size = UDim2.new(0, 200, 0, 250)
 playersFrame.Position = UDim2.new(1, 10, 0, 0)
 playersFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
 playersFrame.BorderSizePixel = 0
@@ -651,20 +653,10 @@ updatePlayerList = function()
             local pBtn = Instance.new("TextButton")
             pBtn.Size = UDim2.new(1, 0, 0, 25)
             pBtn.BackgroundColor3 = (selectedPartners[player]) and Color3.fromRGB(80, 180, 100) or Color3.fromRGB(50, 50, 55)
-            
-            -- Вираховуємо відстань до гравця в метрах (m)
-            local distStr = "[ --m ]"
-            local char = LocalPlayer.Character
-            local pChar = player.Character
-            if char and char:FindFirstChild("HumanoidRootPart") and pChar and pChar:FindFirstChild("HumanoidRootPart") then
-                local dist = math.floor((char.HumanoidRootPart.Position - pChar.HumanoidRootPart.Position).Magnitude)
-                distStr = "[" .. dist .. "m]"
-            end
-            
-            pBtn.Text = player.Name .. "  " .. distStr
+            pBtn.Text = player.Name
             pBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
             pBtn.Font = Enum.Font.Gotham
-            pBtn.TextSize = 11
+            pBtn.TextSize = 12
             pBtn.Parent = scrollingList
 
             local btnCorner = Instance.new("UICorner")
@@ -674,10 +666,6 @@ updatePlayerList = function()
             pBtn.MouseButton1Click:Connect(function()
                 if selectedPartners[player] then
                     selectedPartners[player] = nil
-                    if partnerHighlights[player] then
-                        partnerHighlights[player]:Destroy()
-                        partnerHighlights[player] = nil
-                    end
                 else
                     selectedPartners[player] = player
                 end
@@ -693,6 +681,7 @@ updatePlayerList = function()
                     safeZoneBoxFill.BackgroundColor3 = Color3.fromRGB(80, 220, 120)
                 end
 
+                updatePartnerHighlights()
                 updatePlayerList()
             end)
         end
@@ -1041,10 +1030,17 @@ task.spawn(function()
             statusLabel.Text = "Status: " .. currentFarmStatus
             
             local count = 0
-            for _, _ in pairs(selectedPartners) do
+            local partnerDistText = ""
+            for _, partner in pairs(selectedPartners) do
                 count = count + 1
+                if partner and partner.Character and partner.Character:FindFirstChild("HumanoidRootPart") and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+                    local dist = math.floor((LocalPlayer.Character.HumanoidRootPart.Position - partner.Character.HumanoidRootPart.Position).Magnitude)
+                    partnerDistText = " (" .. dist .. "m)"
+                else
+                    partnerDistText = " (N/A)"
+                end
             end
-            partnerLabel.Text = "Partners: " .. count
+            partnerLabel.Text = "Partners: " .. count .. partnerDistText
             
             if isTimerRunning and sessionStartTime then
                 local elapsed = math.floor(tick() - sessionStartTime)
@@ -1053,11 +1049,6 @@ task.spawn(function()
                 timerLabel.Text = string.format("Time: %02d:%02d", minutes, seconds)
             else
                 timerLabel.Text = "Time: Waiting..."
-            end
-
-            -- Оновлюємо відстані у списку гравців, якщо він відкритий
-            if playersFrame.Visible then
-                updatePlayerList()
             end
         else
             statsLabel.Text = "Speed: 0/h"
