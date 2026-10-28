@@ -159,8 +159,26 @@ local function updateTrackingPlatform(create)
     end
 end
 
--- Функція створення Beam
+-- Функція створення Beam з захистом від дублювання (очищення зайвих)
 local function createBeam(part0, part1, color)
+    -- Перевіряємо Workspace на наявність зайвих Beam і видаляємо дублікати
+    local existingBeams = {}
+    for _, obj in ipairs(Workspace:GetChildren()) do
+        if obj:IsA("Beam") then
+            table.insert(existingBeams, obj)
+        end
+    end
+    
+    if #existingBeams >= 2 then
+        -- Видаляємо рандомний зайвий Beam разом з його асентамі
+        local beamToRemove = existingBeams[math.random(1, #existingBeams)]
+        if beamToRemove then
+            if beamToRemove.Attachment0 then beamToRemove.Attachment0:Destroy() end
+            if beamToRemove.Attachment1 then beamToRemove.Attachment1:Destroy() end
+            beamToRemove:Destroy()
+        end
+    end
+
     local att0 = Instance.new("Attachment", part0)
     local att1 = Instance.new("Attachment", part1)
     
@@ -297,7 +315,6 @@ local function setupAntiFling()
     noclipConnection = RunService.Stepped:Connect(function()
         if not isAutoFarmActive then return end
         
-        -- Вмикаємо проходження камери крізь стіни під час фарму
         LocalPlayer.DevCameraOcclusionMode = Enum.DevCameraOcclusionMode.Invisicam
         
         if trackingPlatform and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
@@ -340,7 +357,6 @@ local function removeAntiFling()
         noclipConnection:Disconnect()
         noclipConnection = nil
     end
-    -- Повертаємо стандартний режим камери
     LocalPlayer.DevCameraOcclusionMode = defaultCameraMode
     updateTrackingPlatform(false)
 end
@@ -754,7 +770,7 @@ local function stopAutoFarm()
 end
 
 local function startAutoFarm()
-    print("[MM2 Debug] Старт автофарму v3.6...")
+    print("[MM2 Debug] Старт автофарму v3.7...")
     setupAntiAfk()
     setupAntiFling()
     updateTrackingPlatform(true)
@@ -1064,7 +1080,7 @@ local titleLabel = Instance.new("TextLabel")
 titleLabel.Size = UDim2.new(1, -70, 1, 0)
 titleLabel.Position = UDim2.new(0, 10, 0, 0)
 titleLabel.BackgroundTransparency = 1
-titleLabel.Text = "Coin Auto Farm | v3.6"
+titleLabel.Text = "Coin Auto Farm | v3.7"
 titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
 titleLabel.TextSize = 15
 titleLabel.Font = Enum.Font.GothamBold
