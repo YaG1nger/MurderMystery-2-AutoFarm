@@ -108,7 +108,7 @@ local partnerTargetCoins = {}
 local partnerCoinHighlights = {}
 local partnerCoinBeams = {}
 
--- Платформа на висоті -490
+-- Платформа, що слідкує за гравцем
 local trackingPlatform = nil
 
 -- Anti-AFK
@@ -128,7 +128,7 @@ local function removeAntiAfk()
     end
 end
 
--- Керування платформою на висоті -490
+-- Керування платформою
 local function updateTrackingPlatform(create)
     if create then
         if not trackingPlatform or not trackingPlatform.Parent then
@@ -143,13 +143,13 @@ local function updateTrackingPlatform(create)
             trackingPlatform.Color = Color3.fromRGB(45, 45, 50)
             trackingPlatform.Material = Enum.Material.SmoothPlastic
             trackingPlatform.Parent = Workspace
-            print("[MM2 Debug] Заокруглена платформа створення на -490 Y успішна.")
+            print("[MM2 Debug] Динамічна платформа створена успішно.")
         end
     else
         if trackingPlatform then
             trackingPlatform:Destroy()
             trackingPlatform = nil
-            print("[MM2 Debug] Платформу на -490 Y видалено.")
+            print("[MM2 Debug] Платформу видалено.")
         end
     end
 end
@@ -287,6 +287,7 @@ local function setCharacterAnimations(enabled)
     end
 end
 
+-- Платформа тримається чітко на 5 студій нижче гравця
 local function setupAntiFling()
     if noclipConnection then return end
     noclipConnection = RunService.Stepped:Connect(function()
@@ -294,7 +295,7 @@ local function setupAntiFling()
         
         if trackingPlatform and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
             local hrp = LocalPlayer.Character.HumanoidRootPart
-            trackingPlatform.Position = Vector3.new(hrp.Position.X, -490, hrp.Position.Z)
+            trackingPlatform.Position = Vector3.new(hrp.Position.X, hrp.Position.Y - 5, hrp.Position.Z)
         end
 
         for _, player in ipairs(Players:GetPlayers()) do
@@ -414,28 +415,6 @@ local function getKnifeThreatOffset(rootPart)
         end
     end
     return threatOffset
-end
-
-local function isAnyCoinClose(rootPart)
-    for _, child in ipairs(Workspace:GetChildren()) do
-        if not ignoredNames[child.Name] and child:IsA("Model") then
-            local coinContainer = child:FindFirstChild("CoinContainer")
-            if coinContainer then
-                for _, coinServer in ipairs(coinContainer:GetChildren()) do
-                    if coinServer.Name == "Coin_Server" then
-                        local coinVisual = coinServer:FindFirstChild("CoinVisual")
-                        if coinVisual and not isCoinDisappearing(coinVisual) then
-                            local dist = (rootPart.Position - coinVisual.Position).Magnitude
-                            if dist <= 10 then
-                                return true
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end
-    return false
 end
 
 local function calculatePartnerPredictions()
@@ -744,7 +723,7 @@ local function stopAutoFarm()
 end
 
 local function startAutoFarm()
-    print("[MM2 Debug] Старт автофарму...")
+    print("[MM2 Debug] Старт автофарму без анкору (динамічна платформа)...")
     setupAntiAfk()
     setupAntiFling()
     updateTrackingPlatform(true)
@@ -779,6 +758,7 @@ local function startAutoFarm()
                 continue
             end
             local rootPart = character.HumanoidRootPart
+            rootPart.Anchored = false -- Жодних зависань
 
             local targetCoinVisual = getClosestCoin()
 
@@ -788,10 +768,6 @@ local function startAutoFarm()
                 if parentCoinServer then
                     ignoredCoins[parentCoinServer] = true
                     task.delay(3, function() ignoredCoins[parentCoinServer] = nil end)
-                end
-
-                if not isAnyCoinClose(rootPart) then
-                    rootPart.Anchored = true
                 end
 
                 clearActiveHighlight()
@@ -821,12 +797,7 @@ local function startAutoFarm()
                 currentFarmStatus = "Collecting Coin"
                 while currentTween and currentTween.PlaybackState == Enum.PlaybackState.Playing do
                     calculatePartnerPredictions()
-
-                    if isAnyCoinClose(rootPart) then
-                        rootPart.Anchored = false
-                    else
-                        rootPart.Anchored = true
-                    end
+                    rootPart.Anchored = false
 
                     local betterCoin = getClosestCoin()
                     if betterCoin and betterCoin ~= targetCoinVisual then
@@ -1052,7 +1023,7 @@ local titleLabel = Instance.new("TextLabel")
 titleLabel.Size = UDim2.new(1, -70, 1, 0)
 titleLabel.Position = UDim2.new(0, 10, 0, 0)
 titleLabel.BackgroundTransparency = 1
-titleLabel.Text = "Coin Auto Farm | v3.3-Coop"
+titleLabel.Text = "Coin Auto Farm | v3.4"
 titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
 titleLabel.TextSize = 15
 titleLabel.Font = Enum.Font.GothamBold
@@ -1414,7 +1385,6 @@ local function updateSlider(input)
     
     flySpeed = math.floor(minSpeed + scale * (maxSpeed - minSpeed))
     
-    -- Значок ⚠️ додається прямо до числа при значенні понад 22
     if flySpeed > 22 then
         speedLabel.Text = "Flight Speed: " .. flySpeed .. "⚠️"
         speedWarningLabel.Text = "Speed above 22 May kick you from the game"
