@@ -136,7 +136,9 @@ local function updateTrackingPlatform(create)
             trackingPlatform.Name = "TrackingPlatform"
             trackingPlatform.Size = Vector3.new(35, 2, 35)
             trackingPlatform.Shape = Enum.PartType.Cylinder
-            trackingPlatform.Orientation = Vector3.new(0, 0, 0)
+            
+            trackingPlatform.Orientation = Vector3.new(0, 0, 0) 
+            
             trackingPlatform.Anchored = true
             trackingPlatform.CanCollide = true
             trackingPlatform.Transparency = 0.4
