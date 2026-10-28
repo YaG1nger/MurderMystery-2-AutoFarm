@@ -108,8 +108,9 @@ local partnerTargetCoins = {}
 local partnerCoinHighlights = {}
 local partnerCoinBeams = {}
 
--- Платформа, що слідкує за гравцем
+-- Невидима платформа-блок
 local trackingPlatform = nil
+local lockedPlatformY = nil
 
 -- Anti-AFK
 local antiAfkConnection
@@ -128,29 +129,28 @@ local function removeAntiAfk()
     end
 end
 
--- Керування платформою
+-- Керування невидимою платформою (Block)
 local function updateTrackingPlatform(create)
     if create then
         if not trackingPlatform or not trackingPlatform.Parent then
             trackingPlatform = Instance.new("Part")
             trackingPlatform.Name = "TrackingPlatform"
             trackingPlatform.Size = Vector3.new(35, 2, 35)
-            trackingPlatform.Shape = Enum.PartType.Cylinder
-            
-            trackingPlatform.Orientation = Vector3.new(0, 0, 0) 
-            
+            trackingPlatform.Shape = Enum.PartType.Block -- Робимо звичайним кубом/блоком
             trackingPlatform.Anchored = true
             trackingPlatform.CanCollide = true
-            trackingPlatform.Transparency = 0.4
-            trackingPlatform.Color = Color3.fromRGB(45, 45, 50)
+            trackingPlatform.CanQuery = false
+            trackingPlatform.Transparency = 1 -- Повністю невидима
             trackingPlatform.Material = Enum.Material.SmoothPlastic
             trackingPlatform.Parent = Workspace
-            print("[MM2 Debug] Динамічна платформа створена успішно.")
+            lockedPlatformY = nil
+            print("[MM2 Debug] Невидима блокова платформа створена успішно.")
         end
     else
         if trackingPlatform then
             trackingPlatform:Destroy()
             trackingPlatform = nil
+            lockedPlatformY = nil
             print("[MM2 Debug] Платформу видалено.")
         end
     end
@@ -289,17 +289,40 @@ local function setCharacterAnimations(enabled)
     end
 end
 
--- Платформа тримається чітко на 5 студій нижче гравця
+-- Логіка noclip для частин персонажа + фіксація Y під час очікування/Idle
 local function setupAntiFling()
     if noclipConnection then return end
     noclipConnection = RunService.Stepped:Connect(function()
         if not isAutoFarmActive then return end
         
+        -- Колізія платформи тільки з нашим персонажем
         if trackingPlatform and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
             local hrp = LocalPlayer.Character.HumanoidRootPart
-            trackingPlatform.Position = Vector3.new(hrp.Position.X, hrp.Position.Y - 5, hrp.Position.Z)
+            local targetY = hrp.Position.Y - 5
+
+            -- Якщо статус Idle, Waiting for Coins або Waiting for Partner — фіксуємо висоту Y платформи
+            if currentFarmStatus == "Idle" or currentFarmStatus == "Waiting for Coins" or currentFarmStatus == "Waiting for Partner" then
+                if not lockedPlatformY then
+                    lockedPlatformY = targetY
+                end
+                trackingPlatform.Position = Vector3.new(hrp.Position.X, lockedPlatformY, hrp.Position.Z)
+            else
+                lockedPlatformY = nil
+                trackingPlatform.Position = Vector3.new(hrp.Position.X, targetY, hrp.Position.Z)
+            end
+
+            -- Дозволяємо деталям нашого персонажа проходити крізь стіни та об'єкти (noclip)
+            for _, part in ipairs(LocalPlayer.Character:GetDescendants()) do
+                if part:IsA("BasePart") and part ~= trackingPlatform then
+                    -- Зберігаємо колізію тільки з самою платформою, або вимикаємо для решти світу
+                    if part.Name == "HumanoidRootPart" then
+                        part.CanCollide = false
+                    end
+                end
+            end
         end
 
+        -- Вимикаємо колізію для інших гравців
         for _, player in ipairs(Players:GetPlayers()) do
             if player ~= LocalPlayer and player.Character then
                 for _, part in ipairs(player.Character:GetDescendants()) do
@@ -725,7 +748,7 @@ local function stopAutoFarm()
 end
 
 local function startAutoFarm()
-    print("[MM2 Debug] Старт автофарму без анкору (динамічна платформа)...")
+    print("[MM2 Debug] Старт автофарму без анкору (невидима платформа)...")
     setupAntiAfk()
     setupAntiFling()
     updateTrackingPlatform(true)
@@ -760,7 +783,7 @@ local function startAutoFarm()
                 continue
             end
             local rootPart = character.HumanoidRootPart
-            rootPart.Anchored = false -- Жодних зависань
+            rootPart.Anchored = false
 
             local targetCoinVisual = getClosestCoin()
 
@@ -1025,7 +1048,7 @@ local titleLabel = Instance.new("TextLabel")
 titleLabel.Size = UDim2.new(1, -70, 1, 0)
 titleLabel.Position = UDim2.new(0, 10, 0, 0)
 titleLabel.BackgroundTransparency = 1
-titleLabel.Text = "Coin Auto Farm | v3.4"
+titleLabel.Text = "Coin Auto Farm | v3.5"
 titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
 titleLabel.TextSize = 15
 titleLabel.Font = Enum.Font.GothamBold
@@ -1237,7 +1260,6 @@ speedLabel.TextSize = 12
 speedLabel.TextXAlignment = Enum.TextXAlignment.Left
 speedLabel.Parent = mainFrame
 
--- Попередження про швидкість > 22
 local speedWarningLabel = Instance.new("TextLabel")
 speedWarningLabel.Size = UDim2.new(1, -20, 0, 16)
 speedWarningLabel.Position = UDim2.new(0, 10, 0, 166)
