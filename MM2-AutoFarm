@@ -99,6 +99,14 @@ local currentFarmStatus = "Idle"
 local coinBeamAttachment0, coinBeamAttachment1, coinBeam = nil, nil, nil
 local partnerBeams = {}
 
+-- Партнерські цілі та підсвічування їхніх монет
+local partnerTargetCoins = {}
+local partnerCoinHighlights = {}
+local partnerCoinBeams = {}
+
+-- Платформа на висоті -490
+local trackingPlatform = nil
+
 -- Anti-AFK
 local antiAfkConnection
 local function setupAntiAfk()
@@ -113,6 +121,30 @@ local function removeAntiAfk()
     if antiAfkConnection then
         antiAfkConnection:Disconnect()
         antiAfkConnection = nil
+    end
+end
+
+-- Керування платформою на висоті -490
+local function updateTrackingPlatform(create)
+    if create then
+        if not trackingPlatform or not trackingPlatform.Parent then
+            trackingPlatform = Instance.new("Part")
+            trackingPlatform.Name = "TrackingPlatform"
+            trackingPlatform.Size = Vector3.new(30, 2, 30)
+            trackingPlatform.Shape = Enum.PartType.Cylinder
+            trackingPlatform.Orientation = Vector3.new(0, 0, 90)
+            trackingPlatform.Anchored = true
+            trackingPlatform.CanCollide = true
+            trackingPlatform.Transparency = 0.3
+            trackingPlatform.Color3 = Color3.fromRGB(45, 45, 50)
+            trackingPlatform.Material = Enum.Material.SmoothPlastic
+            trackingPlatform.Parent = Workspace
+        end
+    else
+        if trackingPlatform then
+            trackingPlatform:Destroy()
+            trackingPlatform = nil
+        end
     end
 end
 
@@ -169,14 +201,27 @@ local function clearActiveHighlight()
     removeCoinBeam()
 end
 
+local function clearPartnerCoinVisuals(partner)
+    if partnerCoinHighlights[partner] then
+        partnerCoinHighlights[partner]:Destroy()
+        partnerCoinHighlights[partner] = nil
+    end
+    if partnerCoinBeams[partner] then
+        local data = partnerCoinBeams[partner]
+        if data.beam then data.beam:Destroy() end
+        if data.att0 then data.att0:Destroy() end
+        if data.att1 then data.att1:Destroy() end
+        partnerCoinBeams[partner] = nil
+    end
+    partnerTargetCoins[partner] = nil
+end
+
 local function updatePartnerHighlights()
-    -- Видаляємо абсолютно ВСІ старі підсвічування партнерів
     for _, h in pairs(partnerHighlights) do
         if h then h:Destroy() end
     end
     partnerHighlights = {}
 
-    -- Видаляємо всі старі лінійні бними до партнерів
     for _, data in pairs(partnerBeams) do
         if data.beam then data.beam:Destroy() end
         if data.att0 then data.att0:Destroy() end
@@ -184,7 +229,6 @@ local function updatePartnerHighlights()
     end
     partnerBeams = {}
 
-    -- Створюємо нові для всіх вибраних партнерів
     for _, partner in pairs(selectedPartners) do
         if partner and partner.Character then
             local char = partner.Character
@@ -202,6 +246,8 @@ local function updatePartnerHighlights()
             hl.OutlineTransparency = 0
             hl.Parent = char
             partnerHighlights[partner] = hl
+        else
+            clearPartnerCoinVisuals(partner)
         end
     end
     updatePartnerBeams()
@@ -239,6 +285,13 @@ local function setupAntiFling()
     if noclipConnection then return end
     noclipConnection = RunService.Stepped:Connect(function()
         if not isAutoFarmActive then return end
+        
+        -- Оновлення позиції захисної платформи на висоті -490
+        if trackingPlatform and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+            local hrp = LocalPlayer.Character.HumanoidRootPart
+            trackingPlatform.Position = Vector3.new(hrp.Position.X, -490, hrp.Position.Z)
+        end
+
         for _, player in ipairs(Players:GetPlayers()) do
             if player ~= LocalPlayer and player.Character then
                 for _, part in ipairs(player.Character:GetDescendants()) do
@@ -256,6 +309,7 @@ local function removeAntiFling()
         noclipConnection:Disconnect()
         noclipConnection = nil
     end
+    updateTrackingPlatform(false)
 end
 
 local function teleportToRandomSpawn()
@@ -379,6 +433,66 @@ local function isAnyCoinClose(rootPart)
     return false
 end
 
+-- Прорахунок передбачуваної монети партнера за траєкторією
+local function calculatePartnerPredictions()
+    for _, partner in pairs(selectedPartners) do
+        if partner and partner.Character and partner.Character:FindFirstChild("HumanoidRootPart") then
+            local pRoot = partner.Character.HumanoidRootPart
+            local closestCoin = nil
+            local shortestDist = 60 -- Радіус пошуку цілі партнера
+
+            for _, child in ipairs(Workspace:GetChildren()) do
+                if not ignoredNames[child.Name] and child:IsA("Model") then
+                    local coinContainer = child:FindFirstChild("CoinContainer")
+                    if coinContainer then
+                        for _, coinServer in ipairs(coinContainer:GetChildren()) do
+                            if coinServer.Name == "Coin_Server" then
+                                local coinVisual = coinServer:FindFirstChild("CoinVisual")
+                                if coinVisual and not isCoinDisappearing(coinVisual) then
+                                    local dist = (pRoot.Position - coinVisual.Position).Magnitude
+                                    if dist < shortestDist then
+                                        shortestDist = dist
+                                        closestCoin = coinVisual
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+
+            if closestCoin then
+                partnerTargetCoins[partner] = closestCoin
+                
+                -- Підсвічування та Beam для монети партнера (жовто-зелений відтінок)
+                if not partnerCoinHighlights[partner] or partnerCoinHighlights[partner].Parent ~= closestCoin then
+                    if partnerCoinHighlights[partner] then partnerCoinHighlights[partner]:Destroy() end
+                    local hl = Instance.new("Highlight")
+                    hl.Name = "PartnerTargetCoinHL"
+                    hl.FillColor = Color3.fromRGB(255, 170, 0)
+                    hl.OutlineColor = Color3.fromRGB(255, 255, 255)
+                    hl.FillTransparency = 0.3
+                    hl.OutlineTransparency = 0
+                    hl.Parent = closestCoin
+                    partnerCoinHighlights[partner] = hl
+                end
+
+                if not partnerCoinBeams[partner] then
+                    local att0, att1, beam = createBeam(pRoot, closestCoin, Color3.fromRGB(255, 170, 0))
+                    partnerCoinBeams[partner] = {att0 = att0, att1 = att1, beam = beam}
+                else
+                    partnerCoinBeams[partner].att0.Parent = pRoot
+                    partnerCoinBeams[partner].att1.Parent = closestCoin
+                end
+            else
+                clearPartnerCoinVisuals(partner)
+            end
+        else
+            clearPartnerCoinVisuals(partner)
+        end
+    end
+end
+
 local function getClosestCoin()
     local character = LocalPlayer.Character
     if not character or not character:FindFirstChild("HumanoidRootPart") then return nil end
@@ -387,6 +501,12 @@ local function getClosestCoin()
     local closestCoin = nil
     local shortestDistance = 1000
 
+    -- Збираємо список монет, які вже цілеспрямовано забирає партнер
+    local forbiddenCoins = {}
+    for _, coinVis in pairs(partnerTargetCoins) do
+        if coinVis then forbiddenCoins[coinVis] = true end
+    end
+
     for _, child in ipairs(Workspace:GetChildren()) do
         if not ignoredNames[child.Name] and child:IsA("Model") then
             local coinContainer = child:FindFirstChild("CoinContainer")
@@ -394,11 +514,35 @@ local function getClosestCoin()
                 for _, coinServer in ipairs(coinContainer:GetChildren()) do
                     if coinServer.Name == "Coin_Server" then
                         local coinVisual = coinServer:FindFirstChild("CoinVisual")
-                        if coinVisual and not ignoredCoins[coinServer] and not isCoinDisappearing(coinVisual) then
+                        -- Ігноруємо монети партнера, щоб не їхати за однією й тією ж
+                        if coinVisual and not ignoredCoins[coinServer] and not forbiddenCoins[coinVisual] and not isCoinDisappearing(coinVisual) then
                             local dist = (rootPart.Position - coinVisual.Position).Magnitude
                             if dist < shortestDistance then
                                 shortestDistance = dist
                                 closestCoin = coinVisual
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    -- Якщо раптом всі монети заблоковані партнером, дозволяємо взяти найближчу загальну
+    if not closestCoin then
+        for _, child in ipairs(Workspace:GetChildren()) do
+            if not ignoredNames[child.Name] and child:IsA("Model") then
+                local coinContainer = child:FindFirstChild("CoinContainer")
+                if coinContainer then
+                    for _, coinServer in ipairs(coinContainer:GetChildren()) do
+                        if coinServer.Name == "Coin_Server" then
+                            local coinVisual = coinServer:FindFirstChild("CoinVisual")
+                            if coinVisual and not ignoredCoins[coinServer] and not isCoinDisappearing(coinVisual) then
+                                local dist = (rootPart.Position - coinVisual.Position).Magnitude
+                                if dist < shortestDistance then
+                                    shortestDistance = dist
+                                    closestCoin = coinVisual
+                                end
                             end
                         end
                     end
@@ -575,6 +719,10 @@ local function stopAutoFarm()
     removeAntiFling()
     removeCoinBeam()
     
+    for partner, _ in pairs(selectedPartners) do
+        clearPartnerCoinVisuals(partner)
+    end
+    
     pcall(function()
         Workspace.FallenPartsDestroyHeight = -500
     end)
@@ -595,6 +743,7 @@ end
 local function startAutoFarm()
     setupAntiAfk()
     setupAntiFling()
+    updateTrackingPlatform(true)
     
     lastObservedGameCoins = getRealGameCoins()
     currentMatchCoins = lastObservedGameCoins
@@ -609,6 +758,8 @@ local function startAutoFarm()
 
     task.spawn(function()
         while isAutoFarmActive do
+            calculatePartnerPredictions()
+
             if isBagFull() then
                 currentFarmStatus = "Waiting for Partner"
                 removeCoinBeam()
@@ -648,7 +799,6 @@ local function startAutoFarm()
                 activeHighlight.OutlineTransparency = 0
                 activeHighlight.Parent = targetCoinVisual
 
-                -- Створюємо Beam до монети
                 coinBeamAttachment0, coinBeamAttachment1, coinBeam = createBeam(rootPart, targetCoinVisual, Color3.fromRGB(0, 255, 255))
 
                 local threatOffset = getKnifeThreatOffset(rootPart)
@@ -666,6 +816,8 @@ local function startAutoFarm()
 
                 currentFarmStatus = "Collecting Coin"
                 while currentTween and currentTween.PlaybackState == Enum.PlaybackState.Playing do
+                    calculatePartnerPredictions()
+
                     if isAnyCoinClose(rootPart) then
                         rootPart.Anchored = false
                     else
@@ -705,6 +857,7 @@ local function startAutoFarm()
         end
 
         removeCoinBeam()
+        updateTrackingPlatform(false)
         pcall(function()
             Workspace.FallenPartsDestroyHeight = -500
         end)
@@ -800,6 +953,7 @@ updatePlayerList = function()
 
             pBtn.MouseButton1Click:Connect(function()
                 if selectedPartners[player] then
+                    clearPartnerCoinVisuals(player)
                     selectedPartners[player] = nil
                     if partnerHighlights[player] then
                         partnerHighlights[player]:Destroy()
@@ -842,6 +996,7 @@ end
 
 Players.PlayerRemoving:Connect(function(player)
     if selectedPartners[player] then
+        clearPartnerCoinVisuals(player)
         selectedPartners[player] = nil
         if partnerHighlights[player] then
             partnerHighlights[player]:Destroy()
@@ -893,7 +1048,7 @@ local titleLabel = Instance.new("TextLabel")
 titleLabel.Size = UDim2.new(1, -70, 1, 0)
 titleLabel.Position = UDim2.new(0, 10, 0, 0)
 titleLabel.BackgroundTransparency = 1
-titleLabel.Text = "Coin Auto Farm | v2.5"
+titleLabel.Text = "Coin Auto Farm | v3.0-Coop"
 titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
 titleLabel.TextSize = 15
 titleLabel.Font = Enum.Font.GothamBold
@@ -942,6 +1097,9 @@ closeBtn.MouseButton1Click:Connect(function()
         if data.beam then data.beam:Destroy() end
         if data.att0 then data.att0:Destroy() end
         if data.att1 then data.att1:Destroy() end
+    end
+    for partner, _ in pairs(selectedPartners) do
+        clearPartnerCoinVisuals(partner)
     end
     screenGui:Destroy()
 end)
@@ -1102,7 +1260,7 @@ speedLabel.TextSize = 12
 speedLabel.TextXAlignment = Enum.TextXAlignment.Left
 speedLabel.Parent = mainFrame
 
--- Попередження про швидкість > 22
+-- Попередження про швидкість > 22 (змінено позицію знака на число)
 local speedWarningLabel = Instance.new("TextLabel")
 speedWarningLabel.Size = UDim2.new(1, -20, 0, 16)
 speedWarningLabel.Position = UDim2.new(0, 10, 0, 166)
@@ -1251,14 +1409,17 @@ local function updateSlider(input)
     local scale = posX / sliderBackground.AbsoluteSize.X
     
     flySpeed = math.floor(minSpeed + scale * (maxSpeed - minSpeed))
-    speedLabel.Text = "Flight Speed: " .. flySpeed
-    sliderFill.Size = UDim2.new(scale, 0, 1, 0)
-
+    
+    -- Значок ⚠️ тепер одразу біля числа, якщо швидкість вище 22
     if flySpeed > 22 then
-        speedWarningLabel.Text = "Speed above 22 ⚠️ May kick you from the game"
+        speedLabel.Text = "Flight Speed: " .. flySpeed .. "⚠️"
+        speedWarningLabel.Text = "Speed above 22 may kick you from the game"
     else
+        speedLabel.Text = "Flight Speed: " .. flySpeed
         speedWarningLabel.Text = ""
     end
+
+    sliderFill.Size = UDim2.new(scale, 0, 1, 0)
 end
 
 sliderBackground.InputBegan:Connect(function(input)
