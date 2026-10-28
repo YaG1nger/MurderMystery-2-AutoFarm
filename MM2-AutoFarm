@@ -112,6 +112,9 @@ local partnerCoinBeams = {}
 local trackingPlatform = nil
 local lockedPlatformY = nil
 
+-- Зберігаємо початкові налаштування камери
+local defaultCameraMode = LocalPlayer.DevCameraOcclusionMode
+
 -- Anti-AFK
 local antiAfkConnection
 local function setupAntiAfk()
@@ -136,11 +139,11 @@ local function updateTrackingPlatform(create)
             trackingPlatform = Instance.new("Part")
             trackingPlatform.Name = "TrackingPlatform"
             trackingPlatform.Size = Vector3.new(35, 2, 35)
-            trackingPlatform.Shape = Enum.PartType.Block -- Робимо звичайним кубом/блоком
+            trackingPlatform.Shape = Enum.PartType.Block
             trackingPlatform.Anchored = true
             trackingPlatform.CanCollide = true
             trackingPlatform.CanQuery = false
-            trackingPlatform.Transparency = 1 -- Повністю невидима
+            trackingPlatform.Transparency = 1
             trackingPlatform.Material = Enum.Material.SmoothPlastic
             trackingPlatform.Parent = Workspace
             lockedPlatformY = nil
@@ -289,18 +292,18 @@ local function setCharacterAnimations(enabled)
     end
 end
 
--- Логіка noclip для частин персонажа + фіксація Y під час очікування/Idle
 local function setupAntiFling()
     if noclipConnection then return end
     noclipConnection = RunService.Stepped:Connect(function()
         if not isAutoFarmActive then return end
         
-        -- Колізія платформи тільки з нашим персонажем
+        -- Вмикаємо проходження камери крізь стіни під час фарму
+        LocalPlayer.DevCameraOcclusionMode = Enum.DevCameraOcclusionMode.Invisicam
+        
         if trackingPlatform and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
             local hrp = LocalPlayer.Character.HumanoidRootPart
             local targetY = hrp.Position.Y - 5
 
-            -- Якщо статус Idle, Waiting for Coins або Waiting for Partner — фіксуємо висоту Y платформи
             if currentFarmStatus == "Idle" or currentFarmStatus == "Waiting for Coins" or currentFarmStatus == "Waiting for Partner" then
                 if not lockedPlatformY then
                     lockedPlatformY = targetY
@@ -311,10 +314,8 @@ local function setupAntiFling()
                 trackingPlatform.Position = Vector3.new(hrp.Position.X, targetY, hrp.Position.Z)
             end
 
-            -- Дозволяємо деталям нашого персонажа проходити крізь стіни та об'єкти (noclip)
             for _, part in ipairs(LocalPlayer.Character:GetDescendants()) do
                 if part:IsA("BasePart") and part ~= trackingPlatform then
-                    -- Зберігаємо колізію тільки з самою платформою, або вимикаємо для решти світу
                     if part.Name == "HumanoidRootPart" then
                         part.CanCollide = false
                     end
@@ -322,7 +323,6 @@ local function setupAntiFling()
             end
         end
 
-        -- Вимикаємо колізію для інших гравців
         for _, player in ipairs(Players:GetPlayers()) do
             if player ~= LocalPlayer and player.Character then
                 for _, part in ipairs(player.Character:GetDescendants()) do
@@ -340,6 +340,8 @@ local function removeAntiFling()
         noclipConnection:Disconnect()
         noclipConnection = nil
     end
+    -- Повертаємо стандартний режим камери
+    LocalPlayer.DevCameraOcclusionMode = defaultCameraMode
     updateTrackingPlatform(false)
 end
 
@@ -651,7 +653,6 @@ local function checkAndUpdateCoinsOnTouch()
 
     if isBagFull() and not hasReachedLimit then
         hasReachedLimit = true
-        print("[MM2 Debug] Мішок заповнено! Чекаємо напарника...")
         local character = LocalPlayer.Character
         local root = character and character:FindFirstChild("HumanoidRootPart")
 
@@ -661,54 +662,59 @@ local function checkAndUpdateCoinsOnTouch()
             break
         end
 
-        if safeZoneEnabled and root then
-            currentFarmStatus = "Waiting for Partner"
-            
-            task.spawn(function()
-                local successTeleport = false
-                while not successTeleport and isAutoFarmActive do
-                    successTeleport = teleportToRandomSpawn()
-                    if not successTeleport then
-                        task.wait(0.1)
+        if hasPartners then
+            if safeZoneEnabled and root then
+                currentFarmStatus = "Waiting for Partner"
+                
+                task.spawn(function()
+                    local successTeleport = false
+                    while not successTeleport and isAutoFarmActive do
+                        successTeleport = teleportToRandomSpawn()
+                        if not successTeleport then
+                            task.wait(0.1)
+                        end
                     end
-                end
 
-                if hasPartners and successTeleport then
-                    task.wait(0.5)
-
-                    while isAutoFarmActive and safeZoneEnabled do
-                        local allReady = true
-                        local characterRoot = character and character:FindFirstChild("HumanoidRootPart")
-
-                        for _, partner in pairs(selectedPartners) do
-                            if partner and partner.Character and partner.Character:FindFirstChild("HumanoidRootPart") and characterRoot then
-                                local partnerRoot = partner.Character.HumanoidRootPart
-                                local dist = (characterRoot.Position - partnerRoot.Position).Magnitude
-                                
-                                if dist > 100 then
-                                    allReady = false
-                                    break
-                                end
-                            else
-                                allReady = false
-                            end
-                        end
-
-                        if allReady then
-                            print("[MM2 Debug] Партнер поруч! Одночасне скидання...")
-                            task.wait(0.3)
-                            if character and character:FindFirstChild("Humanoid") then
-                                character:BreakJoints()
-                            end
-                            break
-                        end
+                    if successTeleport then
                         task.wait(0.5)
+
+                        while isAutoFarmActive and safeZoneEnabled do
+                            local allReady = true
+                            local characterRoot = character and character:FindFirstChild("HumanoidRootPart")
+
+                            for _, partner in pairs(selectedPartners) do
+                                if partner and partner.Character and partner.Character:FindFirstChild("HumanoidRootPart") and characterRoot then
+                                    local partnerRoot = partner.Character.HumanoidRootPart
+                                    local dist = (characterRoot.Position - partnerRoot.Position).Magnitude
+                                    
+                                    if dist > 100 then
+                                        allReady = false
+                                        break
+                                    end
+                                else
+                                    allReady = false
+                                end
+                            end
+
+                            if allReady then
+                                print("[MM2 Debug] Партнер поруч! Одночасне скидання...")
+                                task.wait(0.3)
+                                if character and character:FindFirstChild("Humanoid") then
+                                    character:BreakJoints()
+                                end
+                                break
+                            end
+                            task.wait(0.5)
+                        end
                     end
-                end
-            end)
-        elseif autoResetEnabled and character then
-            root.Anchored = false
-            character:BreakJoints()
+                end)
+            end
+        else
+            currentFarmStatus = "Waiting for Coins"
+            if autoResetEnabled and character then
+                root.Anchored = false
+                character:BreakJoints()
+            end
         end
     end
 end
@@ -748,7 +754,7 @@ local function stopAutoFarm()
 end
 
 local function startAutoFarm()
-    print("[MM2 Debug] Старт автофарму без анкору (невидима платформа)...")
+    print("[MM2 Debug] Старт автофарму v3.6...")
     setupAntiAfk()
     setupAntiFling()
     updateTrackingPlatform(true)
@@ -768,8 +774,18 @@ local function startAutoFarm()
         while isAutoFarmActive do
             calculatePartnerPredictions()
 
+            local hasPartners = false
+            for _, _ in pairs(selectedPartners) do
+                hasPartners = true
+                break
+            end
+
             if isBagFull() then
-                currentFarmStatus = "Waiting for Partner"
+                if hasPartners then
+                    currentFarmStatus = "Waiting for Partner"
+                else
+                    currentFarmStatus = "Waiting for Coins"
+                end
                 removeCoinBeam()
                 task.wait(0.5)
                 continue
@@ -1048,7 +1064,7 @@ local titleLabel = Instance.new("TextLabel")
 titleLabel.Size = UDim2.new(1, -70, 1, 0)
 titleLabel.Position = UDim2.new(0, 10, 0, 0)
 titleLabel.BackgroundTransparency = 1
-titleLabel.Text = "Coin Auto Farm | v3.5"
+titleLabel.Text = "Coin Auto Farm | v3.6"
 titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
 titleLabel.TextSize = 15
 titleLabel.Font = Enum.Font.GothamBold
