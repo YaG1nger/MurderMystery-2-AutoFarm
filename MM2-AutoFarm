@@ -8,7 +8,7 @@ local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
-print("[MM2 Debug] Скрипт завантажується (v3.8)...")
+print("[MM2 Debug] Скрипт завантажується (v3.9)...")
 
 -- 1. Перевірка ID гри (Murder Mystery 2 PlaceId = 142823291)
 if game.PlaceId ~= 142823291 then
@@ -161,8 +161,10 @@ local function updateTrackingPlatform(create)
     end
 end
 
--- Функція створення Beam з захистом від дублювання
+-- Безпечна функція створення Beam з захистом від дублювання та блокування Parent
 local function createBeam(part0, part1, color)
+    if not part0 or not part1 or not part0.Parent or not part1.Parent then return nil, nil, nil end
+
     local existingBeams = {}
     for _, obj in ipairs(Workspace:GetChildren()) do
         if obj:IsA("Beam") then
@@ -173,25 +175,30 @@ local function createBeam(part0, part1, color)
     if #existingBeams >= 2 then
         local beamToRemove = existingBeams[math.random(1, #existingBeams)]
         if beamToRemove then
-            if beamToRemove.Attachment0 then beamToRemove.Attachment0:Destroy() end
-            if beamToRemove.Attachment1 then beamToRemove.Attachment1:Destroy() end
-            beamToRemove:Destroy()
+            pcall(function()
+                if beamToRemove.Attachment0 then beamToRemove.Attachment0:Destroy() end
+                if beamToRemove.Attachment1 then beamToRemove.Attachment1:Destroy() end
+                beamToRemove:Destroy()
+            end)
             print("[MM2 Debug Action] Видалено зайвий дубльований Beam.")
         end
     end
 
-    local att0 = Instance.new("Attachment", part0)
-    local att1 = Instance.new("Attachment", part1)
-    
-    local beam = Instance.new("Beam")
-    beam.Attachment0 = att0
-    beam.Attachment1 = att1
-    beam.Color = ColorSequence.new(color)
-    beam.Width0 = 0.25
-    beam.Width1 = 0.25
-    beam.FaceCamera = true
-    beam.Transparency = NumberSequence.new(0.2)
-    beam.Parent = Workspace
+    local att0, att1, beam
+    pcall(function()
+        att0 = Instance.new("Attachment", part0)
+        att1 = Instance.new("Attachment", part1)
+        
+        beam = Instance.new("Beam")
+        beam.Attachment0 = att0
+        beam.Attachment1 = att1
+        beam.Color = ColorSequence.new(color)
+        beam.Width0 = 0.25
+        beam.Width1 = 0.25
+        beam.FaceCamera = true
+        beam.Transparency = NumberSequence.new(0.2)
+        beam.Parent = Workspace
+    end)
     
     return att0, att1, beam
 end
@@ -204,9 +211,11 @@ end
 
 local function updatePartnerBeams()
     for _, data in pairs(partnerBeams) do
-        if data.beam then data.beam:Destroy() end
-        if data.att0 then data.att0:Destroy() end
-        if data.att1 then data.att1:Destroy() end
+        pcall(function()
+            if data.beam then data.beam:Destroy() end
+            if data.att0 then data.att0:Destroy() end
+            if data.att1 then data.att1:Destroy() end
+        end)
     end
     partnerBeams = {}
 
@@ -218,7 +227,9 @@ local function updatePartnerBeams()
         if partner and partner.Character and partner.Character:FindFirstChild("HumanoidRootPart") then
             local pRoot = partner.Character.HumanoidRootPart
             local att0, att1, beam = createBeam(root, pRoot, Color3.fromRGB(160, 50, 255))
-            partnerBeams[partner] = {att0 = att0, att1 = att1, beam = beam}
+            if beam then
+                partnerBeams[partner] = {att0 = att0, att1 = att1, beam = beam}
+            end
         end
     end
 end
@@ -238,9 +249,11 @@ local function clearPartnerCoinVisuals(partner)
     end
     if partnerCoinBeams[partner] then
         local data = partnerCoinBeams[partner]
-        if data.beam then data.beam:Destroy() end
-        if data.att0 then data.att0:Destroy() end
-        if data.att1 then data.att1:Destroy() end
+        pcall(function()
+            if data.beam then data.beam:Destroy() end
+            if data.att0 then data.att0:Destroy() end
+            if data.att1 then data.att1:Destroy() end
+        end)
         partnerCoinBeams[partner] = nil
     end
     partnerTargetCoins[partner] = nil
@@ -253,9 +266,11 @@ local function updatePartnerHighlights()
     partnerHighlights = {}
 
     for _, data in pairs(partnerBeams) do
-        if data.beam then data.beam:Destroy() end
-        if data.att0 then data.att0:Destroy() end
-        if data.att1 then data.att1:Destroy() end
+        pcall(function()
+            if data.beam then data.beam:Destroy() end
+            if data.att0 then data.att0:Destroy() end
+            if data.att1 then data.att1:Destroy() end
+        end)
     end
     partnerBeams = {}
 
@@ -506,12 +521,19 @@ local function calculatePartnerPredictions()
                     partnerCoinHighlights[partner] = hl
                 end
 
-                if not partnerCoinBeams[partner] then
-                    local att0, att1, beam = createBeam(pRoot, closestCoin, Color3.fromRGB(255, 170, 0))
+                if partnerCoinBeams[partner] then
+                    local data = partnerCoinBeams[partner]
+                    pcall(function()
+                        if data.beam then data.beam:Destroy() end
+                        if data.att0 then data.att0:Destroy() end
+                        if data.att1 then data.att1:Destroy() end
+                    end)
+                    partnerCoinBeams[partner] = nil
+                end
+
+                local att0, att1, beam = createBeam(pRoot, closestCoin, Color3.fromRGB(255, 170, 0))
+                if beam then
                     partnerCoinBeams[partner] = {att0 = att0, att1 = att1, beam = beam}
-                else
-                    partnerCoinBeams[partner].att0.Parent = pRoot
-                    partnerCoinBeams[partner].att1.Parent = closestCoin
                 end
             else
                 clearPartnerCoinVisuals(partner)
@@ -779,7 +801,7 @@ local function stopAutoFarm()
 end
 
 local function startAutoFarm()
-    print("[MM2 Debug Action] Старт автофарму v3.8...")
+    print("[MM2 Debug Action] Старт автофарму v3.9...")
     setupAntiAfk()
     setupAntiFling()
     updateTrackingPlatform(true)
@@ -862,14 +884,13 @@ local function startAutoFarm()
                 currentTween:Play()
 
                 local flightStartTime = tick()
-                local maxFlightDuration = duration + 2.5 -- Захисний таймаут
+                local maxFlightDuration = duration + 2.5
 
                 currentFarmStatus = "Collecting Coin"
                 while currentTween and currentTween.PlaybackState == Enum.PlaybackState.Playing do
                     calculatePartnerPredictions()
                     rootPart.Anchored = false
 
-                    -- Захист від зависання твіна
                     if (tick() - flightStartTime) > maxFlightDuration then
                         print("[MM2 Debug Action] ТУПИК / ЗАВИСАННЯ ТРІНА: час польоту перевищено, скасовуємо.")
                         currentTween:Cancel()
@@ -1013,9 +1034,11 @@ updatePlayerList = function()
                         partnerHighlights[player] = nil
                     end
                     if partnerBeams[player] then
-                        if partnerBeams[player].beam then partnerBeams[player].beam:Destroy() end
-                        if partnerBeams[player].att0 then partnerBeams[player].att0:Destroy() end
-                        if partnerBeams[player].att1 then partnerBeams[player].att1:Destroy() end
+                        pcall(function()
+                            if partnerBeams[player].beam then partnerBeams[player].beam:Destroy() end
+                            if partnerBeams[player].att0 then partnerBeams[player].att0:Destroy() end
+                            if partnerBeams[player].att1 then partnerBeams[player].att1:Destroy() end
+                        end)
                         partnerBeams[player] = nil
                     end
                 else
@@ -1056,9 +1079,11 @@ Players.PlayerRemoving:Connect(function(player)
             partnerHighlights[player] = nil
         end
         if partnerBeams[player] then
-            if partnerBeams[player].beam then partnerBeams[player].beam:Destroy() end
-            if partnerBeams[player].att0 then partnerBeams[player].att0:Destroy() end
-            if partnerBeams[player].att1 then partnerBeams[player].att1:Destroy() end
+            pcall(function()
+                if partnerBeams[player].beam then partnerBeams[player].beam:Destroy() end
+                if partnerBeams[player].att0 then partnerBeams[player].att0:Destroy() end
+                if partnerBeams[player].att1 then partnerBeams[player].att1:Destroy() end
+            end)
             partnerBeams[player] = nil
         end
         if playersFrame.Visible then
@@ -1101,7 +1126,7 @@ local titleLabel = Instance.new("TextLabel")
 titleLabel.Size = UDim2.new(1, -70, 1, 0)
 titleLabel.Position = UDim2.new(0, 10, 0, 0)
 titleLabel.BackgroundTransparency = 1
-titleLabel.Text = "Coin Auto Farm | v3.8"
+titleLabel.Text = "Coin Auto Farm | v3.9"
 titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
 titleLabel.TextSize = 15
 titleLabel.Font = Enum.Font.GothamBold
@@ -1147,9 +1172,11 @@ closeBtn.MouseButton1Click:Connect(function()
     stopAutoFarm()
     for _, h in pairs(partnerHighlights) do if h then h:Destroy() end end
     for _, data in pairs(partnerBeams) do
-        if data.beam then data.beam:Destroy() end
-        if data.att0 then data.att0:Destroy() end
-        if data.att1 then data.att1:Destroy() end
+        pcall(function()
+            if data.beam then data.beam:Destroy() end
+            if data.att0 then data.att0:Destroy() end
+            if data.att1 then data.att1:Destroy() end
+        end)
     end
     for partner, _ in pairs(selectedPartners) do
         clearPartnerCoinVisuals(partner)
