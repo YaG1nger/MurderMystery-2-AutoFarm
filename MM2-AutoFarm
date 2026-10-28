@@ -8,8 +8,11 @@ local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
+print("[MM2 Debug] Скрипт завантажується...")
+
 -- 1. Перевірка ID гри (Murder Mystery 2 PlaceId = 142823291)
 if game.PlaceId ~= 142823291 then
+    print("[MM2 Debug] Помилка: Неправильний PlaceId (" .. tostring(game.PlaceId) .. "). Це не MM2!")
     local alertGui = Instance.new("ScreenGui")
     alertGui.Name = "MM2AlertGui"
     alertGui.Parent = PlayerGui
@@ -58,6 +61,7 @@ end
 
 -- 2. Перевірка наявності вже існуючого GUI
 if PlayerGui:FindFirstChild("CoinFarmMenu") then
+    print("[MM2 Debug] Меню вже існує, скрипт зупинено.")
     return
 end
 
@@ -95,16 +99,13 @@ local hasReachedLimit = false
 local noclipConnection = nil
 local currentFarmStatus = "Idle"
 
--- Змінні для Beam (ліній)
 local coinBeamAttachment0, coinBeamAttachment1, coinBeam = nil, nil, nil
 local partnerBeams = {}
 
--- Партнерські цілі та підсвічування їхніх монет
 local partnerTargetCoins = {}
 local partnerCoinHighlights = {}
 local partnerCoinBeams = {}
 
--- Платформа на висоті -490
 local trackingPlatform = nil
 
 -- Anti-AFK
@@ -139,16 +140,17 @@ local function updateTrackingPlatform(create)
             trackingPlatform.Color3 = Color3.fromRGB(45, 45, 50)
             trackingPlatform.Material = Enum.Material.SmoothPlastic
             trackingPlatform.Parent = Workspace
+            print("[MM2 Debug] Платформа на висоті -490 створена.")
         end
     else
         if trackingPlatform then
             trackingPlatform:Destroy()
             trackingPlatform = nil
+            print("[MM2 Debug] Платформа на висоті -490 знищена.")
         end
     end
 end
 
--- Функція створення Beam
 local function createBeam(part0, part1, color)
     local att0 = Instance.new("Attachment", part0)
     local att1 = Instance.new("Attachment", part1)
@@ -432,7 +434,7 @@ local function isAnyCoinClose(rootPart)
     return false
 end
 
--- Прорахунок передбачуваної монети партнера
+-- Прорахунок передбачуваної монети партнера з дебагом
 local function calculatePartnerPredictions()
     for _, partner in pairs(selectedPartners) do
         if partner and partner.Character and partner.Character:FindFirstChild("HumanoidRootPart") then
@@ -493,7 +495,10 @@ end
 
 local function getClosestCoin()
     local character = LocalPlayer.Character
-    if not character or not character:FindFirstChild("HumanoidRootPart") then return nil end
+    if not character or not character:FindFirstChild("HumanoidRootPart") then
+        print("[MM2 Debug] Помилка: Персонаж або HumanoidRootPart не знайдено під час пошуку монети!")
+        return nil 
+    end
     local rootPart = character.HumanoidRootPart
 
     local closestCoin = nil
@@ -504,6 +509,8 @@ local function getClosestCoin()
         if coinVis then forbiddenCoins[coinVis] = true end
     end
 
+    local totalCoinsFound = 0
+
     for _, child in ipairs(Workspace:GetChildren()) do
         if not ignoredNames[child.Name] and child:IsA("Model") then
             local coinContainer = child:FindFirstChild("CoinContainer")
@@ -511,11 +518,14 @@ local function getClosestCoin()
                 for _, coinServer in ipairs(coinContainer:GetChildren()) do
                     if coinServer.Name == "Coin_Server" then
                         local coinVisual = coinServer:FindFirstChild("CoinVisual")
-                        if coinVisual and not ignoredCoins[coinServer] and not forbiddenCoins[coinVisual] and not isCoinDisappearing(coinVisual) then
-                            local dist = (rootPart.Position - coinVisual.Position).Magnitude
-                            if dist < shortestDistance then
-                                shortestDistance = dist
-                                closestCoin = coinVisual
+                        if coinVisual and not isCoinDisappearing(coinVisual) then
+                            totalCoinsFound = totalCoinsFound + 1
+                            if not ignoredCoins[coinServer] and not forbiddenCoins[coinVisual] then
+                                local dist = (rootPart.Position - coinVisual.Position).Magnitude
+                                if dist < shortestDistance then
+                                    shortestDistance = dist
+                                    closestCoin = coinVisual
+                                end
                             end
                         end
                     end
@@ -524,7 +534,11 @@ local function getClosestCoin()
         end
     end
 
-    if not closestCoin then
+    print("[MM2 Debug] Знайдено монет у Workspace: " .. totalCoinsFound .. ", Найближча вибрана: " .. tostring(closestCoin))
+
+    -- Якщо раптом всі заблоковані партнером, беремо будь-яку найближчу
+    if not closestCoin and totalCoinsFound > 0 then
+        print("[MM2 Debug] Усі монети заблоковані партнером, шукаємо найближчу загальну...")
         for _, child in ipairs(Workspace:GetChildren()) do
             if not ignoredNames[child.Name] and child:IsA("Model") then
                 local coinContainer = child:FindFirstChild("CoinContainer")
@@ -532,7 +546,7 @@ local function getClosestCoin()
                     for _, coinServer in ipairs(coinContainer:GetChildren()) do
                         if coinServer.Name == "Coin_Server" then
                             local coinVisual = coinServer:FindFirstChild("CoinVisual")
-                            if coinVisual and not ignoredCoins[coinServer] and not isCoinDisappearing(coinVisual) then
+                            if coinVisual and not isCoinDisappearing(coinVisual) then
                                 local dist = (rootPart.Position - coinVisual.Position).Magnitude
                                 if dist < shortestDistance then
                                     shortestDistance = dist
@@ -614,6 +628,7 @@ end
 
 local function checkAndUpdateCoinsOnTouch()
     local newCoins = getRealGameCoins()
+    print("[MM2 Debug] Перевірка монет у мішку. Поточні в грі: " .. newCoins)
     
     if newCoins > previousCoinsValue then
         local added = newCoins - previousCoinsValue
@@ -642,6 +657,7 @@ local function checkAndUpdateCoinsOnTouch()
 
     if isBagFull() and not hasReachedLimit then
         hasReachedLimit = true
+        print("[MM2 Debug] Мішок заповнено! Перехід у статус Waiting for Partner...")
         local character = LocalPlayer.Character
         local root = character and character:FindFirstChild("HumanoidRootPart")
 
@@ -685,6 +701,7 @@ local function checkAndUpdateCoinsOnTouch()
                         end
 
                         if allReady then
+                            print("[MM2 Debug] Партнери поруч (< 100м). Робимо BreakJoints()...")
                             task.wait(0.3)
                             if character and character:FindFirstChild("Humanoid") then
                                 character:BreakJoints()
@@ -703,6 +720,7 @@ local function checkAndUpdateCoinsOnTouch()
 end
 
 local function stopAutoFarm()
+    print("[MM2 Debug] Автофарм зупинено.")
     isAutoFarmActive = false
     coinsPerHour = 0
     isTimerRunning = false
@@ -736,6 +754,7 @@ local function stopAutoFarm()
 end
 
 local function startAutoFarm()
+    print("[MM2 Debug] Автофарм запущено!")
     setupAntiAfk()
     setupAntiFling()
     updateTrackingPlatform(true)
@@ -1043,7 +1062,7 @@ local titleLabel = Instance.new("TextLabel")
 titleLabel.Size = UDim2.new(1, -70, 1, 0)
 titleLabel.Position = UDim2.new(0, 10, 0, 0)
 titleLabel.BackgroundTransparency = 1
-titleLabel.Text = "Coin Auto Farm | v3.1-Coop"
+titleLabel.Text = "Coin Auto Farm | v3.2-Debug"
 titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
 titleLabel.TextSize = 15
 titleLabel.Font = Enum.Font.GothamBold
@@ -1434,3 +1453,5 @@ UserInputService.InputChanged:Connect(function(input)
         updateSlider(input)
     end
 end)
+
+print("[MM2 Debug] Інтерфейс успішно ініціалізовано.")
