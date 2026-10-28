@@ -140,7 +140,7 @@ local function updateTrackingPlatform(create)
             trackingPlatform.Anchored = true
             trackingPlatform.CanCollide = true
             trackingPlatform.Transparency = 0.4
-            trackingPlatform.Color = Color3.fromRGB(45, 45, 50) -- Виправлено помилку властивості Color
+            trackingPlatform.Color = Color3.fromRGB(45, 45, 50)
             trackingPlatform.Material = Enum.Material.SmoothPlastic
             trackingPlatform.Parent = Workspace
             print("[MM2 Debug] Заокруглена платформа створення на -490 Y успішна.")
@@ -292,7 +292,6 @@ local function setupAntiFling()
     noclipConnection = RunService.Stepped:Connect(function()
         if not isAutoFarmActive then return end
         
-        -- Слідування платформи по X і Z
         if trackingPlatform and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
             local hrp = LocalPlayer.Character.HumanoidRootPart
             trackingPlatform.Position = Vector3.new(hrp.Position.X, -490, hrp.Position.Z)
@@ -439,7 +438,6 @@ local function isAnyCoinClose(rootPart)
     return false
 end
 
--- Прорахунок передбачуваної монети партнера за його позицією
 local function calculatePartnerPredictions()
     for _, partner in pairs(selectedPartners) do
         if partner and partner.Character and partner.Character:FindFirstChild("HumanoidRootPart") then
@@ -470,7 +468,6 @@ local function calculatePartnerPredictions()
             if closestCoin then
                 partnerTargetCoins[partner] = closestCoin
                 
-                -- Підсвічування передбачуваної монети партнера (помаранчеве)
                 if not partnerCoinHighlights[partner] or partnerCoinHighlights[partner].Parent ~= closestCoin then
                     if partnerCoinHighlights[partner] then partnerCoinHighlights[partner]:Destroy() end
                     local hl = Instance.new("Highlight")
@@ -507,7 +504,6 @@ local function getClosestCoin()
     local closestCoin = nil
     local shortestDistance = 1000
 
-    -- Ігноруємо монети, які з високою ймовірністю летить забирати партнер
     local forbiddenCoins = {}
     for _, coinVis in pairs(partnerTargetCoins) do
         if coinVis then forbiddenCoins[coinVis] = true end
@@ -533,7 +529,6 @@ local function getClosestCoin()
         end
     end
 
-    -- Якщо всі інші монети зайняті партнером, летимо до найближчої наявної
     if not closestCoin then
         for _, child in ipairs(Workspace:GetChildren()) do
             if not ignoredNames[child.Name] and child:IsA("Model") then
