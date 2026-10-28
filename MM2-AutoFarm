@@ -286,7 +286,6 @@ local function setupAntiFling()
     noclipConnection = RunService.Stepped:Connect(function()
         if not isAutoFarmActive then return end
         
-        -- Оновлення позиції захисної платформи на висоті -490
         if trackingPlatform and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
             local hrp = LocalPlayer.Character.HumanoidRootPart
             trackingPlatform.Position = Vector3.new(hrp.Position.X, -490, hrp.Position.Z)
@@ -433,13 +432,13 @@ local function isAnyCoinClose(rootPart)
     return false
 end
 
--- Прорахунок передбачуваної монети партнера за траєкторією
+-- Прорахунок передбачуваної монети партнера
 local function calculatePartnerPredictions()
     for _, partner in pairs(selectedPartners) do
         if partner and partner.Character and partner.Character:FindFirstChild("HumanoidRootPart") then
             local pRoot = partner.Character.HumanoidRootPart
             local closestCoin = nil
-            local shortestDist = 60 -- Радіус пошуку цілі партнера
+            local shortestDist = 80
 
             for _, child in ipairs(Workspace:GetChildren()) do
                 if not ignoredNames[child.Name] and child:IsA("Model") then
@@ -464,7 +463,6 @@ local function calculatePartnerPredictions()
             if closestCoin then
                 partnerTargetCoins[partner] = closestCoin
                 
-                -- Підсвічування та Beam для монети партнера (жовто-зелений відтінок)
                 if not partnerCoinHighlights[partner] or partnerCoinHighlights[partner].Parent ~= closestCoin then
                     if partnerCoinHighlights[partner] then partnerCoinHighlights[partner]:Destroy() end
                     local hl = Instance.new("Highlight")
@@ -501,7 +499,6 @@ local function getClosestCoin()
     local closestCoin = nil
     local shortestDistance = 1000
 
-    -- Збираємо список монет, які вже цілеспрямовано забирає партнер
     local forbiddenCoins = {}
     for _, coinVis in pairs(partnerTargetCoins) do
         if coinVis then forbiddenCoins[coinVis] = true end
@@ -514,7 +511,6 @@ local function getClosestCoin()
                 for _, coinServer in ipairs(coinContainer:GetChildren()) do
                     if coinServer.Name == "Coin_Server" then
                         local coinVisual = coinServer:FindFirstChild("CoinVisual")
-                        -- Ігноруємо монети партнера, щоб не їхати за однією й тією ж
                         if coinVisual and not ignoredCoins[coinServer] and not forbiddenCoins[coinVisual] and not isCoinDisappearing(coinVisual) then
                             local dist = (rootPart.Position - coinVisual.Position).Magnitude
                             if dist < shortestDistance then
@@ -528,7 +524,6 @@ local function getClosestCoin()
         end
     end
 
-    -- Якщо раптом всі монети заблоковані партнером, дозволяємо взяти найближчу загальну
     if not closestCoin then
         for _, child in ipairs(Workspace:GetChildren()) do
             if not ignoredNames[child.Name] and child:IsA("Model") then
@@ -1048,7 +1043,7 @@ local titleLabel = Instance.new("TextLabel")
 titleLabel.Size = UDim2.new(1, -70, 1, 0)
 titleLabel.Position = UDim2.new(0, 10, 0, 0)
 titleLabel.BackgroundTransparency = 1
-titleLabel.Text = "Coin Auto Farm | v3.0-Coop"
+titleLabel.Text = "Coin Auto Farm | v3.1-Coop"
 titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
 titleLabel.TextSize = 15
 titleLabel.Font = Enum.Font.GothamBold
@@ -1260,7 +1255,6 @@ speedLabel.TextSize = 12
 speedLabel.TextXAlignment = Enum.TextXAlignment.Left
 speedLabel.Parent = mainFrame
 
--- Попередження про швидкість > 22 (змінено позицію знака на число)
 local speedWarningLabel = Instance.new("TextLabel")
 speedWarningLabel.Size = UDim2.new(1, -20, 0, 16)
 speedWarningLabel.Position = UDim2.new(0, 10, 0, 166)
@@ -1410,7 +1404,6 @@ local function updateSlider(input)
     
     flySpeed = math.floor(minSpeed + scale * (maxSpeed - minSpeed))
     
-    -- Значок ⚠️ тепер одразу біля числа, якщо швидкість вище 22
     if flySpeed > 22 then
         speedLabel.Text = "Flight Speed: " .. flySpeed .. "⚠️"
         speedWarningLabel.Text = "Speed above 22 may kick you from the game"
