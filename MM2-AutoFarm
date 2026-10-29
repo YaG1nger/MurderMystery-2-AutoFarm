@@ -4,17 +4,15 @@ local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local VirtualUser = game:GetService("VirtualUser")
 local RunService = game:GetService("RunService")
+local SoundService = game:GetService("SoundService")
 
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
-print("[MM2 Debug] Скрипт завантажується (v3.9)...")
-
--- 1. Перевірка ID гри (Murder Mystery 2 PlaceId = 142823291)
 if game.PlaceId ~= 142823291 then
-    print("[MM2 Debug] Помилка: Неправильний PlaceId (" .. tostring(game.PlaceId) .. "). Скрипт зупинено.")
     local alertGui = Instance.new("ScreenGui")
     alertGui.Name = "MM2AlertGui"
+    alertGui.DisplayOrder = 2147483647
     alertGui.Parent = PlayerGui
 
     local alertFrame = Instance.new("Frame")
@@ -59,11 +57,12 @@ if game.PlaceId ~= 142823291 then
     return
 end
 
--- 2. Перевірка наявності вже існуючого GUI
 if PlayerGui:FindFirstChild("CoinFarmMenu") then
-    print("[MM2 Debug] Меню вже існує в PlayerGui, повторний запуск скасовано.")
     return
 end
+
+local originalMaxZoom = LocalPlayer.CameraMaxZoomDistance
+LocalPlayer.CameraMaxZoomDistance = 500
 
 local ignoredNames = {
     ["Camera"] = true,
@@ -87,35 +86,238 @@ local autoResetEnabled = false
 local safeZoneEnabled = false
 local selectedPartners = {}
 local partnerHighlights = {}
+local murdererHighlights = {}
 
 local sessionCoinsCollected = 0
 local currentMatchCoins = 0
 local maxMatchCoins = 0
+
+local successfulFullBags = 0
+local failedBagAttempts = 0
+local roundCoinsSpawned = false
+local hasCountedCurrentRound = false
+
 local coinsPerHour = 0
 local sessionStartTime = nil
 local isTimerRunning = false
 local previousCoinsValue = 0
 local hasReachedLimit = false
+local speedWarningSent = false
 local noclipConnection = nil
 local currentFarmStatus = "Idle"
 
--- Змінні для Beam (ліній)
 local coinBeamAttachment0, coinBeamAttachment1, coinBeam = nil, nil, nil
 local partnerBeams = {}
 
--- Партнерські передбачувані монети та їхні візуали
 local partnerTargetCoins = {}
 local partnerCoinHighlights = {}
 local partnerCoinBeams = {}
 
--- Невидима платформа-блок
 local trackingPlatform = nil
 local lockedPlatformY = nil
-
--- Зберігаємо початкові налаштування камери
 local defaultCameraMode = LocalPlayer.DevCameraOcclusionMode
 
--- Anti-AFK
+local notifySettings = {
+    duration = 3,
+    soundId = "rbxassetid://140273873013760",
+    position = "TopRight",
+    scale = 1.0,
+    solo = {
+        bagFullReset = true,
+        safeZoneTeleport = true,
+        speedWarning = true,
+    },
+    partner = {
+        bagFullWait = true,
+        allPartnersFullReset = true,
+        partnerLeft = true,
+    }
+}
+
+local notifSound = Instance.new("Sound")
+notifSound.Name = "FarmNotifSound"
+notifSound.SoundId = notifySettings.soundId
+notifSound.Volume = 1
+notifSound.Parent = SoundService
+
+local notifGui = Instance.new("ScreenGui")
+notifGui.Name = "FarmNotifGui"
+notifGui.ResetOnSpawn = false
+notifGui.DisplayOrder = 2147483647
+notifGui.Parent = PlayerGui
+
+local notifContainer = Instance.new("Frame")
+notifContainer.Size = UDim2.new(0, 300, 1, 0)
+notifContainer.Position = UDim2.new(1, -310, 0, 10)
+notifContainer.BackgroundTransparency = 1
+notifContainer.Parent = notifGui
+
+local notifLayout = Instance.new("UIListLayout")
+notifLayout.SortOrder = Enum.SortOrder.LayoutOrder
+notifLayout.Padding = UDim.new(0, 8)
+notifLayout.Parent = notifContainer
+
+local function updateNotifContainerPosition()
+    local baseW = 280 * notifySettings.scale
+    notifContainer.Size = UDim2.new(0, baseW + 20, 1, 0)
+    local pos = notifySettings.position
+    if pos == "TopRight" then
+        notifContainer.Position = UDim2.new(1, -baseW - 30, 0, 10)
+        notifLayout.HorizontalAlignment = Enum.HorizontalAlignment.Right
+        notifLayout.VerticalAlignment = Enum.VerticalAlignment.Top
+    elseif pos == "TopLeft" then
+        notifContainer.Position = UDim2.new(0, 10, 0, 10)
+        notifLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+        notifLayout.VerticalAlignment = Enum.VerticalAlignment.Top
+    elseif pos == "BottomRight" then
+        notifContainer.Position = UDim2.new(1, -baseW - 30, 1, -10)
+        notifContainer.Size = UDim2.new(0, baseW + 20, 0, 400)
+        notifLayout.HorizontalAlignment = Enum.HorizontalAlignment.Right
+        notifLayout.VerticalAlignment = Enum.VerticalAlignment.Bottom
+    elseif pos == "BottomLeft" then
+        notifContainer.Position = UDim2.new(0, 10, 1, -10)
+        notifContainer.Size = UDim2.new(0, baseW + 20, 0, 400)
+        notifLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+        notifLayout.VerticalAlignment = Enum.VerticalAlignment.Bottom
+    elseif pos == "TopCenter" then
+        notifContainer.Position = UDim2.new(0.5, -(baseW/2), 0, 10)
+        notifLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+        notifLayout.VerticalAlignment = Enum.VerticalAlignment.Top
+    elseif pos == "BottomCenter" then
+        notifContainer.Position = UDim2.new(0.5, -(baseW/2), 1, -410)
+        notifContainer.Size = UDim2.new(0, baseW + 20, 0, 400)
+        notifLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+        notifLayout.VerticalAlignment = Enum.VerticalAlignment.Bottom
+    elseif pos == "CenterLeft" then
+        notifContainer.Position = UDim2.new(0, 10, 0.5, -200)
+        notifContainer.Size = UDim2.new(0, baseW + 20, 0, 400)
+        notifLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+        notifLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+    elseif pos == "CenterRight" then
+        notifContainer.Position = UDim2.new(1, -baseW - 30, 0.5, -200)
+        notifContainer.Size = UDim2.new(0, baseW + 20, 0, 400)
+        notifLayout.HorizontalAlignment = Enum.HorizontalAlignment.Right
+        notifLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+    end
+end
+
+local function sendNotification(text)
+    pcall(function()
+        notifSound.SoundId = notifySettings.soundId
+        notifSound:Play()
+    end)
+
+    local w = math.floor(280 * notifySettings.scale)
+    local h = math.floor(55 * notifySettings.scale)
+    local fontSize = math.floor(13 * notifySettings.scale)
+
+    local card = Instance.new("Frame")
+    card.Size = UDim2.new(0, w, 0, h)
+    card.BackgroundColor3 = Color3.fromRGB(35, 35, 42)
+    card.BorderSizePixel = 0
+    card.Transparency = 1
+    card.Parent = notifContainer
+
+    local cardCorner = Instance.new("UICorner")
+    cardCorner.CornerRadius = UDim.new(0, 8)
+    cardCorner.Parent = card
+
+    local cardStroke = Instance.new("UIStroke")
+    cardStroke.Color = Color3.fromRGB(160, 50, 255)
+    cardStroke.Thickness = 1.5
+    cardStroke.Transparency = 1
+    cardStroke.Parent = card
+
+    local msgLabel = Instance.new("TextLabel")
+    msgLabel.Size = UDim2.new(1, -16, 1, -10)
+    msgLabel.Position = UDim2.new(0, 8, 0, 5)
+    msgLabel.BackgroundTransparency = 1
+    msgLabel.Text = text
+    msgLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    msgLabel.Font = Enum.Font.GothamMedium
+    msgLabel.TextSize = fontSize
+    msgLabel.TextWrapped = true
+    msgLabel.TextTransparency = 1
+    msgLabel.Parent = card
+
+    TweenService:Create(card, TweenInfo.new(0.3), {Transparency = 0}):Play()
+    TweenService:Create(cardStroke, TweenInfo.new(0.3), {Transparency = 0}):Play()
+    TweenService:Create(msgLabel, TweenInfo.new(0.3), {TextTransparency = 0}):Play()
+
+    task.delay(notifySettings.duration, function()
+        if card and card.Parent then
+            local fadeOut = TweenService:Create(card, TweenInfo.new(0.3), {Transparency = 1})
+            TweenService:Create(cardStroke, TweenInfo.new(0.3), {Transparency = 1}):Play()
+            TweenService:Create(msgLabel, TweenInfo.new(0.3), {TextTransparency = 1}):Play()
+            fadeOut:Play()
+            fadeOut.Completed:Connect(function()
+                card:Destroy()
+            end)
+        end
+    end)
+end
+
+local function isPlayerMurderer(player)
+    if not player or not player.Character then return false end
+    local char = player.Character
+
+    local backpack = player:FindFirstChild("Backpack")
+    if backpack then
+        for _, item in ipairs(backpack:GetChildren()) do
+            if item:IsA("Tool") and (item.Name:lower():find("knife") or item.Name == "Knife") then
+                return true
+            end
+        end
+    end
+
+    for _, item in ipairs(char:GetChildren()) do
+        if item:IsA("Tool") and (item.Name:lower():find("knife") or item.Name == "Knife") then
+            return true
+        end
+    end
+
+    return false
+end
+
+local function getMurderersList()
+    local murderers = {}
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and isPlayerMurderer(player) then
+            table.insert(murderers, player)
+        end
+    end
+    return murderers
+end
+
+local function updateMurdererHighlights()
+    for _, h in pairs(murdererHighlights) do
+        if h then h:Destroy() end
+    end
+    murdererHighlights = {}
+
+    local murderers = getMurderersList()
+    if #murderers == 1 then
+        local murd = murderers[1]
+        if not selectedPartners[murd] and murd.Character then
+            local hl = Instance.new("Highlight")
+            hl.Name = "MurdererHighlight"
+            hl.FillColor = Color3.fromRGB(255, 50, 50)
+            hl.OutlineColor = Color3.fromRGB(255, 255, 255)
+            hl.FillTransparency = 0.4
+            hl.OutlineTransparency = 0
+            hl.Parent = murd.Character
+            murdererHighlights[murd] = hl
+        end
+    end
+end
+
+task.spawn(function()
+    while true do
+        updateMurdererHighlights()
+        task.wait(1)
+    end
+end)
+
 local antiAfkConnection
 local function setupAntiAfk()
     if antiAfkConnection then return end
@@ -123,18 +325,15 @@ local function setupAntiAfk()
         VirtualUser:CaptureController()
         VirtualUser:ClickButton2(Vector2.new())
     end)
-    print("[MM2 Debug Action] Anti-AFK активовано.")
 end
 
 local function removeAntiAfk()
     if antiAfkConnection then
         antiAfkConnection:Disconnect()
         antiAfkConnection = nil
-        print("[MM2 Debug Action] Anti-AFK вимкнено.")
     end
 end
 
--- Керування невидимою платформою (Block)
 local function updateTrackingPlatform(create)
     if create then
         if not trackingPlatform or not trackingPlatform.Parent then
@@ -149,19 +348,16 @@ local function updateTrackingPlatform(create)
             trackingPlatform.Material = Enum.Material.SmoothPlastic
             trackingPlatform.Parent = Workspace
             lockedPlatformY = nil
-            print("[MM2 Debug Action] Невидима блокова платформа створена на -5 студій.")
         end
     else
         if trackingPlatform then
             trackingPlatform:Destroy()
             trackingPlatform = nil
             lockedPlatformY = nil
-            print("[MM2 Debug Action] Платформу видалено.")
         end
     end
 end
 
--- Безпечна функція створення Beam з захистом від дублювання та блокування Parent
 local function createBeam(part0, part1, color)
     if not part0 or not part1 or not part0.Parent or not part1.Parent then return nil, nil, nil end
 
@@ -172,7 +368,7 @@ local function createBeam(part0, part1, color)
         end
     end
     
-    if #existingBeams >= 2 then
+    if #existingBeams >= 4 then
         local beamToRemove = existingBeams[math.random(1, #existingBeams)]
         if beamToRemove then
             pcall(function()
@@ -180,7 +376,6 @@ local function createBeam(part0, part1, color)
                 if beamToRemove.Attachment1 then beamToRemove.Attachment1:Destroy() end
                 beamToRemove:Destroy()
             end)
-            print("[MM2 Debug Action] Видалено зайвий дубльований Beam.")
         end
     end
 
@@ -221,14 +416,31 @@ local function updatePartnerBeams()
 
     local char = LocalPlayer.Character
     local root = char and char:FindFirstChild("HumanoidRootPart")
-    if not root then return end
 
+    local activePartnerList = {}
     for _, partner in pairs(selectedPartners) do
         if partner and partner.Character and partner.Character:FindFirstChild("HumanoidRootPart") then
+            table.insert(activePartnerList, partner)
+        end
+    end
+
+    if root then
+        for _, partner in ipairs(activePartnerList) do
             local pRoot = partner.Character.HumanoidRootPart
             local att0, att1, beam = createBeam(root, pRoot, Color3.fromRGB(160, 50, 255))
             if beam then
-                partnerBeams[partner] = {att0 = att0, att1 = att1, beam = beam}
+                table.insert(partnerBeams, {att0 = att0, att1 = att1, beam = beam})
+            end
+        end
+    end
+
+    for i = 1, #activePartnerList do
+        for j = i + 1, #activePartnerList do
+            local p1Root = activePartnerList[i].Character.HumanoidRootPart
+            local p2Root = activePartnerList[j].Character.HumanoidRootPart
+            local att0, att1, beam = createBeam(p1Root, p2Root, Color3.fromRGB(160, 50, 255))
+            if beam then
+                table.insert(partnerBeams, {att0 = att0, att1 = att1, beam = beam})
             end
         end
     end
@@ -264,15 +476,6 @@ local function updatePartnerHighlights()
         if h then h:Destroy() end
     end
     partnerHighlights = {}
-
-    for _, data in pairs(partnerBeams) do
-        pcall(function()
-            if data.beam then data.beam:Destroy() end
-            if data.att0 then data.att0:Destroy() end
-            if data.att1 then data.att1:Destroy() end
-        end)
-    end
-    partnerBeams = {}
 
     for _, partner in pairs(selectedPartners) do
         if partner and partner.Character then
@@ -322,6 +525,16 @@ local function setCharacterAnimations(enabled)
         local animateScript = character:FindFirstChild("Animate")
         if animateScript and animateScript:IsA("LocalScript") then
             animateScript.Disabled = not enabled
+        end
+        
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        if humanoid then
+            local animator = humanoid:FindFirstChildOfClass("Animator")
+            if animator then
+                for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+                    track:Stop(0)
+                end
+            end
         end
     end
 end
@@ -375,7 +588,6 @@ local function removeAntiFling()
     end
     LocalPlayer.DevCameraOcclusionMode = defaultCameraMode
     updateTrackingPlatform(false)
-    print("[MM2 Debug Action] Noclip та камеру відновлено до стандартних.")
 end
 
 local function teleportToRandomSpawn()
@@ -406,7 +618,6 @@ local function teleportToRandomSpawn()
         if #spawnsList > 0 then
             local randomSpawn = spawnsList[math.random(1, #spawnsList)]
             rootPart.CFrame = randomSpawn.CFrame + Vector3.new(0, 3, 0)
-            print("[MM2 Debug Action] Телепортація до випадкового спавну успішна.")
             return true
         else
             rootPart.CFrame = CFrame.new(0, 100, 0)
@@ -420,6 +631,11 @@ LocalPlayer.CharacterAdded:Connect(function(character)
     local root = character:WaitForChild("HumanoidRootPart")
     root.Anchored = false
     
+    if roundCoinsSpawned and not hasCountedCurrentRound then
+        failedBagAttempts = failedBagAttempts + 1
+        hasCountedCurrentRound = true
+    end
+
     local hasPartners = false
     local _, _ = next(selectedPartners)
     if _ then hasPartners = true end
@@ -451,32 +667,20 @@ local function isCoinDisappearing(coinVisual)
     return false
 end
 
-local function getKnifeThreatOffset(rootPart)
-    local threatOffset = Vector3.new(0, 0, 0)
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and player.Character then
-            local enemyChar = player.Character
-            local enemyRoot = enemyChar:FindFirstChild("HumanoidRootPart")
-            if enemyRoot then
-                local hasKnife = false
-                for _, item in ipairs(enemyChar:GetChildren()) do
-                    if item:IsA("Tool") and item.Name:lower():find("knife") then
-                        hasKnife = true
-                        break
-                    end
-                end
-                if hasKnife then
-                    local dist = (rootPart.Position - enemyRoot.Position).Magnitude
-                    if dist < 25 then
-                        local pushDir = (rootPart.Position - enemyRoot.Position).Unit
-                        threatOffset = threatOffset + (pushDir * 12)
-                        print("[MM2 Debug Action] Зафіксовано загрозу (кинджал)! Змінюємо траєкторію.")
-                    end
-                end
+-- Перевірка відстані монети до мардера (тримаємося на відстані близько 50 студій)
+local function isCoinNearMurderer(coinPos)
+    local murderers = getMurderersList()
+    if #murderers == 0 then return false end
+
+    for _, player in ipairs(murderers) do
+        if not selectedPartners[player] and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+            local mRoot = player.Character.HumanoidRootPart
+            if (coinPos - mRoot.Position).Magnitude < 50 then
+                return true
             end
         end
     end
-    return threatOffset
+    return false
 end
 
 local function calculatePartnerPredictions()
@@ -557,6 +761,8 @@ local function getClosestCoin()
         if coinVis then forbiddenCoins[coinVis] = true end
     end
 
+    local foundAnyCoinOnMap = false
+
     for _, child in ipairs(Workspace:GetChildren()) do
         if not ignoredNames[child.Name] and child:IsA("Model") then
             local coinContainer = child:FindFirstChild("CoinContainer")
@@ -564,11 +770,16 @@ local function getClosestCoin()
                 for _, coinServer in ipairs(coinContainer:GetChildren()) do
                     if coinServer.Name == "Coin_Server" then
                         local coinVisual = coinServer:FindFirstChild("CoinVisual")
-                        if coinVisual and not ignoredCoins[coinServer] and not forbiddenCoins[coinVisual] and not isCoinDisappearing(coinVisual) then
-                            local dist = (rootPart.Position - coinVisual.Position).Magnitude
-                            if dist < shortestDistance then
-                                shortestDistance = dist
-                                closestCoin = coinVisual
+                        if coinVisual and not isCoinDisappearing(coinVisual) then
+                            foundAnyCoinOnMap = true
+                            if not ignoredCoins[coinServer] and not forbiddenCoins[coinVisual] then
+                                if not isCoinNearMurderer(coinVisual.Position) then
+                                    local dist = (rootPart.Position - coinVisual.Position).Magnitude
+                                    if dist < shortestDistance then
+                                        shortestDistance = dist
+                                        closestCoin = coinVisual
+                                    end
+                                end
                             end
                         end
                     end
@@ -577,26 +788,9 @@ local function getClosestCoin()
         end
     end
 
-    if not closestCoin then
-        for _, child in ipairs(Workspace:GetChildren()) do
-            if not ignoredNames[child.Name] and child:IsA("Model") then
-                local coinContainer = child:FindFirstChild("CoinContainer")
-                if coinContainer then
-                    for _, coinServer in ipairs(coinContainer:GetChildren()) do
-                        if coinServer.Name == "Coin_Server" then
-                            local coinVisual = coinServer:FindFirstChild("CoinVisual")
-                            if coinVisual and not ignoredCoins[coinServer] and not isCoinDisappearing(coinVisual) then
-                                local dist = (rootPart.Position - coinVisual.Position).Magnitude
-                                if dist < shortestDistance then
-                                    shortestDistance = dist
-                                    closestCoin = coinVisual
-                                end
-                            end
-                        end
-                    end
-                end
-            end
-        end
+    if foundAnyCoinOnMap and not roundCoinsSpawned then
+        roundCoinsSpawned = true
+        hasCountedCurrentRound = false
     end
 
     return closestCoin
@@ -673,7 +867,6 @@ local function checkAndUpdateCoinsOnTouch()
         sessionCoinsCollected = sessionCoinsCollected + added
         currentMatchCoins = newCoins
         previousCoinsValue = newCoins
-        print("[MM2 Debug Action] Зібрано монет: +" .. added .. " (Всього в раунді: " .. currentMatchCoins .. ")")
 
         if currentMatchCoins > maxMatchCoins then
             maxMatchCoins = currentMatchCoins
@@ -689,15 +882,25 @@ local function checkAndUpdateCoinsOnTouch()
             coinsPerHour = math.floor((sessionCoinsCollected / elapsed) * 3600)
         end
     elseif newCoins < previousCoinsValue then
+        if roundCoinsSpawned and not hasCountedCurrentRound then
+            failedBagAttempts = failedBagAttempts + 1
+            hasCountedCurrentRound = true
+        end
+
+        roundCoinsSpawned = false
         currentMatchCoins = newCoins
         previousCoinsValue = newCoins
         hasReachedLimit = false
-        print("[MM2 Debug Action] Новий раунд, монети скинуто.")
     end
 
     if isBagFull() and not hasReachedLimit then
         hasReachedLimit = true
-        print("[MM2 Debug Action] Мішок заповнено!")
+
+        if not hasCountedCurrentRound then
+            successfulFullBags = successfulFullBags + 1
+            hasCountedCurrentRound = true
+        end
+
         local character = LocalPlayer.Character
         local root = character and character:FindFirstChild("HumanoidRootPart")
 
@@ -710,7 +913,9 @@ local function checkAndUpdateCoinsOnTouch()
         if hasPartners then
             if safeZoneEnabled and root then
                 currentFarmStatus = "Waiting for Partner"
-                print("[MM2 Debug Action] Статус змінено на: Waiting for Partner")
+                if notifySettings.partner.bagFullWait then
+                    sendNotification("Coin Bag Full Waiting For Partner")
+                end
                 
                 task.spawn(function()
                     local successTeleport = false
@@ -743,7 +948,9 @@ local function checkAndUpdateCoinsOnTouch()
                             end
 
                             if allReady then
-                                print("[MM2 Debug Action] Партнер поруч! Одночасне скидання...")
+                                if notifySettings.partner.allPartnersFullReset then
+                                    sendNotification("All Partners are full Reseting...")
+                                end
                                 task.wait(0.3)
                                 if character and character:FindFirstChild("Humanoid") then
                                     character:BreakJoints()
@@ -757,22 +964,29 @@ local function checkAndUpdateCoinsOnTouch()
             end
         else
             currentFarmStatus = "Waiting for Coins"
-            print("[MM2 Debug Action] Статус змінено на: Waiting for Coins (партнерів немає)")
             if autoResetEnabled and character then
+                if notifySettings.solo.bagFullReset then
+                    sendNotification("Coin Bag Full Reseting...")
+                end
                 root.Anchored = false
                 character:BreakJoints()
+            elseif safeZoneEnabled then
+                if notifySettings.solo.safeZoneTeleport then
+                    sendNotification("Coin Bag Full Teleporting to Safe Zone")
+                end
+                teleportToRandomSpawn()
             end
         end
     end
 end
 
 local function stopAutoFarm()
-    print("[MM2 Debug Action] Зупинка автофарму.")
     isAutoFarmActive = false
     coinsPerHour = 0
     isTimerRunning = false
     sessionStartTime = nil
     hasReachedLimit = false
+    speedWarningSent = false
     currentFarmStatus = "Idle"
     
     removeAntiAfk()
@@ -801,7 +1015,6 @@ local function stopAutoFarm()
 end
 
 local function startAutoFarm()
-    print("[MM2 Debug Action] Старт автофарму v3.9...")
     setupAntiAfk()
     setupAntiFling()
     updateTrackingPlatform(true)
@@ -812,6 +1025,7 @@ local function startAutoFarm()
     isTimerRunning = false
     sessionStartTime = nil
     hasReachedLimit = false
+    speedWarningSent = false
 
     pcall(function()
         Workspace.FallenPartsDestroyHeight = 0/0
@@ -852,7 +1066,6 @@ local function startAutoFarm()
 
             if targetCoinVisual and targetCoinVisual:IsDescendantOf(Workspace) then
                 currentFarmStatus = "Moving to Coin"
-                print("[MM2 Debug Action] Знайдено ціль, переміщуємось до монети.")
                 local parentCoinServer = targetCoinVisual.Parent
                 if parentCoinServer then
                     ignoredCoins[parentCoinServer] = true
@@ -870,9 +1083,7 @@ local function startAutoFarm()
 
                 coinBeamAttachment0, coinBeamAttachment1, coinBeam = createBeam(rootPart, targetCoinVisual, Color3.fromRGB(0, 255, 255))
 
-                local threatOffset = getKnifeThreatOffset(rootPart)
-                local targetCFrame = CFrame.new(targetCoinVisual.Position + threatOffset)
-
+                local targetCFrame = CFrame.new(targetCoinVisual.Position)
                 local distance = (rootPart.Position - targetCFrame.Position).Magnitude
                 local duration = distance / flySpeed
                 local currentRotation = rootPart.CFrame - rootPart.Position
@@ -892,13 +1103,18 @@ local function startAutoFarm()
                     rootPart.Anchored = false
 
                     if (tick() - flightStartTime) > maxFlightDuration then
-                        print("[MM2 Debug Action] ТУПИК / ЗАВИСАННЯ ТРІНА: час польоту перевищено, скасовуємо.")
                         currentTween:Cancel()
                         currentTween = nil
                         break
                     end
 
                     if not targetCoinVisual or not targetCoinVisual:IsDescendantOf(Workspace) or isCoinDisappearing(targetCoinVisual) or not isAutoFarmActive then
+                        currentTween:Cancel()
+                        currentTween = nil
+                        break
+                    end
+
+                    if isCoinNearMurderer(targetCoinVisual.Position) then
                         currentTween:Cancel()
                         currentTween = nil
                         break
@@ -945,11 +1161,10 @@ local function startAutoFarm()
     end)
 end
 
--- ================= ІНТЕРФЕЙС =================
-
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "CoinFarmMenu"
 screenGui.ResetOnSpawn = false
+screenGui.DisplayOrder = 2147483647
 screenGui.Parent = PlayerGui
 
 local mainFrame = Instance.new("Frame")
@@ -965,9 +1180,78 @@ local uiCorner = Instance.new("UICorner")
 uiCorner.CornerRadius = UDim.new(0, 10)
 uiCorner.Parent = mainFrame
 
+local statsDetailFrame = Instance.new("Frame")
+statsDetailFrame.Name = "StatsDetailFrame"
+statsDetailFrame.Size = UDim2.new(0, 210, 0, 130)
+statsDetailFrame.Position = UDim2.new(0.5, -105, 0.5, -65)
+statsDetailFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 42)
+statsDetailFrame.BorderSizePixel = 0
+statsDetailFrame.Visible = false
+statsDetailFrame.ZIndex = 100
+statsDetailFrame.Parent = screenGui
+
+local sdfCorner = Instance.new("UICorner")
+sdfCorner.CornerRadius = UDim.new(0, 8)
+sdfCorner.Parent = statsDetailFrame
+
+local sdfStroke = Instance.new("UIStroke")
+sdfStroke.Color = Color3.fromRGB(80, 220, 255)
+sdfStroke.Thickness = 1.5
+sdfStroke.Parent = statsDetailFrame
+
+local sdfTitle = Instance.new("TextLabel")
+sdfTitle.Size = UDim2.new(1, -20, 0, 25)
+sdfTitle.Position = UDim2.new(0, 10, 0, 8)
+sdfTitle.BackgroundTransparency = 1
+sdfTitle.Text = "Bag Success Details"
+sdfTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+sdfTitle.Font = Enum.Font.GothamBold
+sdfTitle.TextSize = 12
+sdfTitle.Parent = statsDetailFrame
+
+local sdfSuccessLabel = Instance.new("TextLabel")
+sdfSuccessLabel.Size = UDim2.new(1, -20, 0, 20)
+sdfSuccessLabel.Position = UDim2.new(0, 10, 0, 40)
+sdfSuccessLabel.BackgroundTransparency = 1
+sdfSuccessLabel.Text = "Full Bags (Success): 0"
+sdfSuccessLabel.TextColor3 = Color3.fromRGB(80, 220, 120)
+sdfSuccessLabel.Font = Enum.Font.GothamMedium
+sdfSuccessLabel.TextSize = 11
+sdfSuccessLabel.TextXAlignment = Enum.TextXAlignment.Left
+sdfSuccessLabel.Parent = statsDetailFrame
+
+local sdfFailLabel = Instance.new("TextLabel")
+sdfFailLabel.Size = UDim2.new(1, -20, 0, 20)
+sdfFailLabel.Position = UDim2.new(0, 10, 0, 65)
+sdfFailLabel.BackgroundTransparency = 1
+sdfFailLabel.Text = "Failed Runs: 0"
+sdfFailLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
+sdfFailLabel.Font = Enum.Font.GothamMedium
+sdfFailLabel.TextSize = 11
+sdfFailLabel.TextXAlignment = Enum.TextXAlignment.Left
+sdfFailLabel.Parent = statsDetailFrame
+
+local sdfCloseBtn = Instance.new("TextButton")
+sdfCloseBtn.Size = UDim2.new(0, 80, 0, 24)
+sdfCloseBtn.Position = UDim2.new(0.5, -40, 1, -32)
+sdfCloseBtn.BackgroundColor3 = Color3.fromRGB(55, 55, 60)
+sdfCloseBtn.Text = "Close"
+sdfCloseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+sdfCloseBtn.Font = Enum.Font.GothamBold
+sdfCloseBtn.TextSize = 10
+sdfCloseBtn.Parent = statsDetailFrame
+
+local sdfCloseCorner = Instance.new("UICorner")
+sdfCloseCorner.CornerRadius = UDim.new(0, 4)
+sdfCloseCorner.Parent = sdfCloseBtn
+
+sdfCloseBtn.MouseButton1Click:Connect(function()
+    statsDetailFrame.Visible = false
+end)
+
 local playersFrame = Instance.new("Frame")
 playersFrame.Name = "PlayersFrame"
-playersFrame.Size = UDim2.new(0, 200, 0, 250)
+playersFrame.Size = UDim2.new(0, 220, 0, 270)
 playersFrame.Position = UDim2.new(1, 10, 0, 0)
 playersFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
 playersFrame.BorderSizePixel = 0
@@ -1000,8 +1284,325 @@ uiListLayout.SortOrder = Enum.SortOrder.LayoutOrder
 uiListLayout.Padding = UDim.new(0, 5)
 uiListLayout.Parent = scrollingList
 
+local partnerListPanel = Instance.new("Frame")
+partnerListPanel.Name = "PartnerListPanel"
+partnerListPanel.Size = UDim2.new(0, 220, 0, 270)
+partnerListPanel.Position = UDim2.new(1, 10, 0, 0)
+partnerListPanel.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
+partnerListPanel.BorderSizePixel = 0
+partnerListPanel.Visible = false
+partnerListPanel.Parent = mainFrame
+
+local plpCorner = Instance.new("UICorner")
+plpCorner.CornerRadius = UDim.new(0, 10)
+plpCorner.Parent = partnerListPanel
+
+local plpTitle = Instance.new("TextLabel")
+plpTitle.Size = UDim2.new(1, 0, 0, 30)
+plpTitle.BackgroundTransparency = 1
+plpTitle.Text = "Partners List"
+plpTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+plpTitle.Font = Enum.Font.GothamBold
+plpTitle.TextSize = 13
+plpTitle.Parent = partnerListPanel
+
+local partnerScroll = Instance.new("ScrollingFrame")
+partnerScroll.Size = UDim2.new(1, -10, 1, -40)
+partnerScroll.Position = UDim2.new(0, 5, 0, 35)
+partnerScroll.BackgroundTransparency = 1
+partnerScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+partnerScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+partnerScroll.Parent = partnerListPanel
+
+local partnerListLayout = Instance.new("UIListLayout")
+partnerListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+partnerListLayout.Padding = UDim.new(0, 6)
+partnerListLayout.Parent = partnerScroll
+
+local notifSettingsFrame = Instance.new("Frame")
+notifSettingsFrame.Name = "NotifSettingsFrame"
+notifSettingsFrame.Size = UDim2.new(0, 260, 0, 420)
+notifSettingsFrame.Position = UDim2.new(0, -270, 0, 0)
+notifSettingsFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 40)
+notifSettingsFrame.BorderSizePixel = 0
+notifSettingsFrame.Visible = false
+notifSettingsFrame.Parent = mainFrame
+
+local nsfCorner = Instance.new("UICorner")
+nsfCorner.CornerRadius = UDim.new(0, 10)
+nsfCorner.Parent = notifSettingsFrame
+
+local nsfTitle = Instance.new("TextLabel")
+nsfTitle.Size = UDim2.new(1, 0, 0, 30)
+nsfTitle.BackgroundTransparency = 1
+nsfTitle.Text = "Notification Settings"
+nsfTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+nsfTitle.Font = Enum.Font.GothamBold
+nsfTitle.TextSize = 13
+nsfTitle.Parent = notifSettingsFrame
+
+local nsfScroll = Instance.new("ScrollingFrame")
+nsfScroll.Size = UDim2.new(1, -10, 1, -40)
+nsfScroll.Position = UDim2.new(0, 5, 0, 35)
+nsfScroll.BackgroundTransparency = 1
+nsfScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+nsfScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+nsfScroll.Parent = notifSettingsFrame
+
+local nsfLayout = Instance.new("UIListLayout")
+nsfLayout.SortOrder = Enum.SortOrder.LayoutOrder
+nsfLayout.Padding = UDim.new(0, 6)
+nsfLayout.Parent = nsfScroll
+
 local autoResetBoxFill, safeZoneBoxFill
-local updatePlayerList
+local updatePlayerList, updateActivePartnerPanel
+
+local function createToggleRow(parent, labelText, defaultState, callback)
+    local row = Instance.new("Frame")
+    row.Size = UDim2.new(1, 0, 0, 24)
+    row.BackgroundTransparency = 1
+    row.Parent = parent
+
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, 0, 1, 0)
+    btn.BackgroundTransparency = 1
+    btn.Text = ""
+    btn.Parent = row
+
+    local box = Instance.new("Frame")
+    box.Size = UDim2.new(0, 16, 0, 16)
+    box.Position = UDim2.new(0, 4, 0.5, -8)
+    box.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    box.BorderSizePixel = 0
+    box.Parent = row
+
+    local bCorner = Instance.new("UICorner")
+    bCorner.CornerRadius = UDim.new(0, 4)
+    bCorner.Parent = box
+
+    local fill = Instance.new("Frame")
+    fill.Size = UDim2.new(1, -4, 1, -4)
+    fill.Position = UDim2.new(0, 2, 0, 2)
+    fill.BackgroundColor3 = defaultState and Color3.fromRGB(80, 220, 120) or Color3.fromRGB(255, 255, 255)
+    fill.BorderSizePixel = 0
+    fill.Parent = box
+
+    local fCorner = Instance.new("UICorner")
+    fCorner.CornerRadius = UDim.new(0, 2)
+    fCorner.Parent = fill
+
+    local txt = Instance.new("TextLabel")
+    txt.Size = UDim2.new(1, -28, 1, 0)
+    txt.Position = UDim2.new(0, 26, 0, 0)
+    txt.BackgroundTransparency = 1
+    txt.Text = labelText
+    txt.TextColor3 = Color3.fromRGB(200, 200, 200)
+    txt.Font = Enum.Font.Gotham
+    txt.TextSize = 10
+    txt.TextXAlignment = Enum.TextXAlignment.Left
+    txt.Parent = row
+
+    local state = defaultState
+    btn.MouseButton1Click:Connect(function()
+        state = not state
+        fill.BackgroundColor3 = state and Color3.fromRGB(80, 220, 120) or Color3.fromRGB(255, 255, 255)
+        callback(state)
+    end)
+end
+
+local soloCat = Instance.new("TextLabel")
+soloCat.Size = UDim2.new(1, 0, 0, 20)
+soloCat.BackgroundTransparency = 1
+soloCat.Text = "--- Solo Notifications ---"
+soloCat.TextColor3 = Color3.fromRGB(160, 50, 255)
+soloCat.Font = Enum.Font.GothamBold
+soloCat.TextSize = 11
+soloCat.Parent = nsfScroll
+
+createToggleRow(nsfScroll, "Coin Bag Full Reseting", notifySettings.solo.bagFullReset, function(st) notifySettings.solo.bagFullReset = st end)
+createToggleRow(nsfScroll, "Teleporting to Safe Zone", notifySettings.solo.safeZoneTeleport, function(st) notifySettings.solo.safeZoneTeleport = st end)
+createToggleRow(nsfScroll, "Speed Risk Warning", notifySettings.solo.speedWarning, function(st) notifySettings.solo.speedWarning = st end)
+
+local partnerCat = Instance.new("TextLabel")
+partnerCat.Size = UDim2.new(1, 0, 0, 20)
+partnerCat.BackgroundTransparency = 1
+partnerCat.Text = "--- Partner Notifications ---"
+partnerCat.TextColor3 = Color3.fromRGB(160, 50, 255)
+partnerCat.Font = Enum.Font.GothamBold
+partnerCat.TextSize = 11
+partnerCat.Parent = nsfScroll
+
+createToggleRow(nsfScroll, "Waiting For Partner", notifySettings.partner.bagFullWait, function(st) notifySettings.partner.bagFullWait = st end)
+createToggleRow(nsfScroll, "All Partners Full Reset", notifySettings.partner.allPartnersFullReset, function(st) notifySettings.partner.allPartnersFullReset = st end)
+createToggleRow(nsfScroll, "Partner Left Notification", notifySettings.partner.partnerLeft, function(st) notifySettings.partner.partnerLeft = st end)
+
+local posLabel = Instance.new("TextLabel")
+posLabel.Size = UDim2.new(1, 0, 0, 18)
+posLabel.BackgroundTransparency = 1
+posLabel.Text = "Position Grid:"
+posLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+posLabel.Font = Enum.Font.Gotham
+posLabel.TextSize = 10
+posLabel.TextXAlignment = Enum.TextXAlignment.Left
+posLabel.Parent = nsfScroll
+
+local posGridFrame = Instance.new("Frame")
+posGridFrame.Size = UDim2.new(1, 0, 0, 92)
+posGridFrame.BackgroundTransparency = 1
+posGridFrame.Parent = nsfScroll
+
+local buttonData = {
+    {name = "TopLeft", text = "TL", row = 1, col = 1},
+    {name = "TopCenter", text = "TC", row = 1, col = 2},
+    {name = "TopRight", text = "TR", row = 1, col = 3},
+    {name = "CenterLeft", text = "CL", row = 2, col = 1},
+    {name = "CenterRight", text = "CR", row = 2, col = 3},
+    {name = "BottomLeft", text = "BL", row = 3, col = 1},
+    {name = "BottomCenter", text = "BC", row = 3, col = 2},
+    {name = "BottomRight", text = "BR", row = 3, col = 3},
+}
+
+local startX = (260 - (3 * 56 + 2 * 6)) / 2
+local gridButtons = {}
+
+for _, data in ipairs(buttonData) do
+    local pBtn = Instance.new("TextButton")
+    pBtn.Size = UDim2.new(0, 56, 0, 26)
+    local posX = startX + (data.col - 1) * (56 + 6)
+    local posY = (data.row - 1) * (26 + 6)
+    pBtn.Position = UDim2.new(0, posX, 0, posY)
+    
+    pBtn.BackgroundColor3 = (notifySettings.position == data.name) and Color3.fromRGB(80, 180, 100) or Color3.fromRGB(50, 50, 55)
+    pBtn.Text = data.text
+    pBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    pBtn.Font = Enum.Font.GothamBold
+    pBtn.TextSize = 10
+    pBtn.Parent = posGridFrame
+
+    local bCorner = Instance.new("UICorner")
+    bCorner.CornerRadius = UDim.new(0, 4)
+    bCorner.Parent = pBtn
+
+    gridButtons[data.name] = pBtn
+
+    pBtn.MouseButton1Click:Connect(function()
+        notifySettings.position = data.name
+        for name, btn in pairs(gridButtons) do
+            btn.BackgroundColor3 = (name == data.name) and Color3.fromRGB(80, 180, 100) or Color3.fromRGB(50, 50, 55)
+        end
+        updateNotifContainerPosition()
+    end)
+end
+
+local sizeLabel = Instance.new("TextLabel")
+sizeLabel.Size = UDim2.new(1, 0, 0, 18)
+sizeLabel.BackgroundTransparency = 1
+sizeLabel.Text = "Message Scale (e.g. 1.0):"
+sizeLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+sizeLabel.Font = Enum.Font.Gotham
+sizeLabel.TextSize = 10
+sizeLabel.TextXAlignment = Enum.TextXAlignment.Left
+sizeLabel.Parent = nsfScroll
+
+local sizeBox = Instance.new("TextBox")
+sizeBox.Size = UDim2.new(1, 0, 0, 24)
+sizeBox.BackgroundColor3 = Color3.fromRGB(50, 50, 55)
+sizeBox.Text = "1.0"
+sizeBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+sizeBox.Font = Enum.Font.Gotham
+sizeBox.TextSize = 10
+sizeBox.Parent = nsfScroll
+
+local sb2Corner = Instance.new("UICorner")
+sb2Corner.CornerRadius = UDim.new(0, 4)
+sb2Corner.Parent = sizeBox
+
+sizeBox.FocusLost:Connect(function()
+    local val = tonumber(sizeBox.Text)
+    if val and val > 0.3 and val < 3.0 then
+        notifySettings.scale = val
+        updateNotifContainerPosition()
+    end
+end)
+
+local soundLabel = Instance.new("TextLabel")
+soundLabel.Size = UDim2.new(1, 0, 0, 18)
+soundLabel.BackgroundTransparency = 1
+soundLabel.Text = "Sound Asset ID:"
+soundLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+soundLabel.Font = Enum.Font.Gotham
+soundLabel.TextSize = 10
+soundLabel.TextXAlignment = Enum.TextXAlignment.Left
+soundLabel.Parent = nsfScroll
+
+local soundBox = Instance.new("TextBox")
+soundBox.Size = UDim2.new(1, 0, 0, 24)
+soundBox.BackgroundColor3 = Color3.fromRGB(50, 50, 55)
+soundBox.Text = "140273873013760"
+soundBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+soundBox.Font = Enum.Font.Gotham
+soundBox.TextSize = 10
+soundBox.Parent = nsfScroll
+
+local sbCorner = Instance.new("UICorner")
+sbCorner.CornerRadius = UDim.new(0, 4)
+sbCorner.Parent = soundBox
+
+soundBox.FocusLost:Connect(function()
+    local text = soundBox.Text
+    if text:sub(1, 13) ~= "rbxassetid://" then
+        notifySettings.soundId = "rbxassetid://" .. text
+    else
+        notifySettings.soundId = text
+    end
+end)
+
+local durLabel = Instance.new("TextLabel")
+durLabel.Size = UDim2.new(1, 0, 0, 18)
+durLabel.BackgroundTransparency = 1
+durLabel.Text = "Duration (sec):"
+durLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+durLabel.Font = Enum.Font.Gotham
+durLabel.TextSize = 10
+durLabel.TextXAlignment = Enum.TextXAlignment.Left
+durLabel.Parent = nsfScroll
+
+local durBox = Instance.new("TextBox")
+durBox.Size = UDim2.new(1, 0, 0, 24)
+durBox.BackgroundColor3 = Color3.fromRGB(50, 50, 55)
+durBox.Text = "3"
+durBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+durBox.Font = Enum.Font.Gotham
+durBox.TextSize = 10
+durBox.Parent = nsfScroll
+
+local dbCorner = Instance.new("UICorner")
+dbCorner.CornerRadius = UDim.new(0, 4)
+dbCorner.Parent = durBox
+
+durBox.FocusLost:Connect(function()
+    local num = tonumber(durBox.Text)
+    if num then
+        notifySettings.duration = num
+    end
+end)
+
+local testNotifBtn = Instance.new("TextButton")
+testNotifBtn.Size = UDim2.new(1, 0, 0, 26)
+testNotifBtn.BackgroundColor3 = Color3.fromRGB(160, 50, 255)
+testNotifBtn.Text = "Test Message"
+testNotifBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+testNotifBtn.Font = Enum.Font.GothamBold
+testNotifBtn.TextSize = 11
+testNotifBtn.Parent = nsfScroll
+
+local tnbCorner = Instance.new("UICorner")
+tnbCorner.CornerRadius = UDim.new(0, 4)
+tnbCorner.Parent = testNotifBtn
+
+testNotifBtn.MouseButton1Click:Connect(function()
+    sendNotification("Test")
+end)
 
 updatePlayerList = function()
     for _, child in ipairs(scrollingList:GetChildren()) do
@@ -1010,15 +1611,37 @@ updatePlayerList = function()
         end
     end
 
-    for _, player in ipairs(Players:GetPlayers()) do
+    local playerList = Players:GetPlayers()
+    table.sort(playerList, function(a, b)
+        if a == LocalPlayer then return false end
+        if b == LocalPlayer then return true end
+        local aIsFriend = LocalPlayer:IsFriendsWith(a.UserId)
+        local bIsFriend = LocalPlayer:IsFriendsWith(b.UserId)
+        if aIsFriend and not bIsFriend then return true end
+        if not aIsFriend and bIsFriend then return false end
+        return a.Name < b.Name
+    end)
+
+    for _, player in ipairs(playerList) do
         if player ~= LocalPlayer then
+            local isFriend = LocalPlayer:IsFriendsWith(player.UserId)
+            local isMurd = isPlayerMurderer(player)
+
             local pBtn = Instance.new("TextButton")
-            pBtn.Size = UDim2.new(1, 0, 0, 25)
-            pBtn.BackgroundColor3 = (selectedPartners[player]) and Color3.fromRGB(80, 180, 100) or Color3.fromRGB(50, 50, 55)
-            pBtn.Text = player.Name
+            pBtn.Size = UDim2.new(1, 0, 0, 28)
+            
+            if selectedPartners[player] then
+                pBtn.BackgroundColor3 = Color3.fromRGB(80, 180, 100)
+            elseif isFriend then
+                pBtn.BackgroundColor3 = Color3.fromRGB(60, 90, 130)
+            else
+                pBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 55)
+            end
+
+            pBtn.Text = (isFriend and "⭐ " or "") .. player.Name .. (isMurd and selectedPartners[player] and " [Murderer]" or "")
             pBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-            pBtn.Font = Enum.Font.Gotham
-            pBtn.TextSize = 12
+            pBtn.Font = Enum.Font.GothamMedium
+            pBtn.TextSize = 11
             pBtn.Parent = scrollingList
 
             local btnCorner = Instance.new("UICorner")
@@ -1032,14 +1655,6 @@ updatePlayerList = function()
                     if partnerHighlights[player] then
                         partnerHighlights[player]:Destroy()
                         partnerHighlights[player] = nil
-                    end
-                    if partnerBeams[player] then
-                        pcall(function()
-                            if partnerBeams[player].beam then partnerBeams[player].beam:Destroy() end
-                            if partnerBeams[player].att0 then partnerBeams[player].att0:Destroy() end
-                            if partnerBeams[player].att1 then partnerBeams[player].att1:Destroy() end
-                        end)
-                        partnerBeams[player] = nil
                     end
                 else
                     selectedPartners[player] = player
@@ -1065,6 +1680,89 @@ updatePlayerList = function()
 
                 updatePartnerHighlights()
                 updatePlayerList()
+                updateActivePartnerPanel()
+            end)
+        end
+    end
+end
+
+updateActivePartnerPanel = function()
+    for _, child in ipairs(partnerScroll:GetChildren()) do
+        if child:IsA("Frame") then
+            child:Destroy()
+        end
+    end
+
+    for partner, _ in pairs(selectedPartners) do
+        if partner then
+            local card = Instance.new("Frame")
+            card.Size = UDim2.new(1, 0, 0, 42)
+            card.BackgroundColor3 = Color3.fromRGB(45, 45, 50)
+            card.BorderSizePixel = 0
+            card.Parent = partnerScroll
+
+            local cCorner = Instance.new("UICorner")
+            cCorner.CornerRadius = UDim.new(0, 6)
+            cCorner.Parent = card
+
+            local img = Instance.new("ImageLabel")
+            img.Size = UDim2.new(0, 32, 0, 32)
+            img.Position = UDim2.new(0, 5, 0.5, -16)
+            img.BackgroundTransparency = 1
+            img.Parent = card
+
+            local imgCorner = Instance.new("UICorner")
+            imgCorner.CornerRadius = UDim.new(1, 0)
+            imgCorner.Parent = img
+
+            task.spawn(function()
+                local content = Players:GetUserThumbnailAsync(partner.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size420x420)
+                img.Image = content
+            end)
+
+            local isMurd = isPlayerMurderer(partner)
+            local displayName = Instance.new("TextLabel")
+            displayName.Size = UDim2.new(1, -90, 0, 16)
+            displayName.Position = UDim2.new(0, 42, 0, 4)
+            displayName.BackgroundTransparency = 1
+            displayName.Text = partner.DisplayName .. (isMurd and " [Murderer]" or "")
+            displayName.TextColor3 = isMurd and Color3.fromRGB(255, 100, 100) or Color3.fromRGB(255, 255, 255)
+            displayName.Font = Enum.Font.GothamBold
+            displayName.TextSize = 11
+            displayName.TextXAlignment = Enum.TextXAlignment.Left
+            displayName.Parent = card
+
+            local userName = Instance.new("TextLabel")
+            userName.Size = UDim2.new(1, -90, 0, 14)
+            userName.Position = UDim2.new(0, 42, 0, 20)
+            userName.BackgroundTransparency = 1
+            userName.Text = "@" .. partner.Name
+            userName.TextColor3 = Color3.fromRGB(150, 150, 155)
+            userName.Font = Enum.Font.Gotham
+            userName.TextSize = 9
+            userName.TextXAlignment = Enum.TextXAlignment.Left
+            userName.Parent = card
+
+            local distLabel = Instance.new("TextLabel")
+            distLabel.Size = UDim2.new(0, 45, 1, 0)
+            distLabel.Position = UDim2.new(1, -48, 0, 0)
+            distLabel.BackgroundTransparency = 1
+            distLabel.Text = "N/A"
+            distLabel.TextColor3 = Color3.fromRGB(160, 50, 255)
+            distLabel.Font = Enum.Font.GothamBold
+            distLabel.TextSize = 10
+            distLabel.Parent = card
+
+            task.spawn(function()
+                while card and card.Parent and selectedPartners[partner] do
+                    if partner and partner.Character and partner.Character:FindFirstChild("HumanoidRootPart") and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+                        local d = math.floor((LocalPlayer.Character.HumanoidRootPart.Position - partner.Character.HumanoidRootPart.Position).Magnitude)
+                        distLabel.Text = d .. "m"
+                    else
+                        distLabel.Text = "N/A"
+                    end
+                    task.wait(0.5)
+                end
             end)
         end
     end
@@ -1072,23 +1770,17 @@ end
 
 Players.PlayerRemoving:Connect(function(player)
     if selectedPartners[player] then
+        if notifySettings.partner.partnerLeft then
+            sendNotification("Partner " .. player.Name .. " left the game")
+        end
         clearPartnerCoinVisuals(player)
         selectedPartners[player] = nil
         if partnerHighlights[player] then
             partnerHighlights[player]:Destroy()
             partnerHighlights[player] = nil
         end
-        if partnerBeams[player] then
-            pcall(function()
-                if partnerBeams[player].beam then partnerBeams[player].beam:Destroy() end
-                if partnerBeams[player].att0 then partnerBeams[player].att0:Destroy() end
-                if partnerBeams[player].att1 then partnerBeams[player].att1:Destroy() end
-            end)
-            partnerBeams[player] = nil
-        end
-        if playersFrame.Visible then
-            updatePlayerList()
-        end
+        updatePlayerList()
+        updateActivePartnerPanel()
     end
 end)
 
@@ -1123,15 +1815,33 @@ UserInputService.InputChanged:Connect(function(input)
 end)
 
 local titleLabel = Instance.new("TextLabel")
-titleLabel.Size = UDim2.new(1, -70, 1, 0)
+titleLabel.Size = UDim2.new(1, -95, 1, 0)
 titleLabel.Position = UDim2.new(0, 10, 0, 0)
 titleLabel.BackgroundTransparency = 1
-titleLabel.Text = "Coin Auto Farm | v3.9"
+titleLabel.Text = "Coin Farm | v4.7"
 titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-titleLabel.TextSize = 15
+titleLabel.TextSize = 14
 titleLabel.Font = Enum.Font.GothamBold
 titleLabel.TextXAlignment = Enum.TextXAlignment.Left
 titleLabel.Parent = topBar
+
+local notifBtn = Instance.new("TextButton")
+notifBtn.Size = UDim2.new(0, 24, 0, 24)
+notifBtn.Position = UDim2.new(1, -86, 0, 6)
+notifBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 50)
+notifBtn.Text = "🔔"
+notifBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
+notifBtn.Font = Enum.Font.GothamBold
+notifBtn.TextSize = 11
+notifBtn.Parent = topBar
+
+local nbCorner = Instance.new("UICorner")
+nbCorner.CornerRadius = UDim.new(0, 6)
+nbCorner.Parent = notifBtn
+
+notifBtn.MouseButton1Click:Connect(function()
+    notifSettingsFrame.Visible = not notifSettingsFrame.Visible
+end)
 
 local partnerListBtn = Instance.new("TextButton")
 partnerListBtn.Size = UDim2.new(0, 24, 0, 24)
@@ -1140,7 +1850,7 @@ partnerListBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 50)
 partnerListBtn.Text = "👥"
 partnerListBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
 partnerListBtn.Font = Enum.Font.GothamBold
-partnerListBtn.TextSize = 12
+partnerListBtn.TextSize = 11
 partnerListBtn.Parent = topBar
 
 local plCorner = Instance.new("UICorner")
@@ -1149,6 +1859,7 @@ plCorner.Parent = partnerListBtn
 
 partnerListBtn.MouseButton1Click:Connect(function()
     playersFrame.Visible = not playersFrame.Visible
+    partnerListPanel.Visible = false
     if playersFrame.Visible then
         updatePlayerList()
     end
@@ -1161,7 +1872,7 @@ closeBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 50)
 closeBtn.Text = "X"
 closeBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
 closeBtn.Font = Enum.Font.GothamBold
-closeBtn.TextSize = 14
+closeBtn.TextSize = 13
 closeBtn.Parent = topBar
 
 local closeCorner = Instance.new("UICorner")
@@ -1170,7 +1881,9 @@ closeCorner.Parent = closeBtn
 
 closeBtn.MouseButton1Click:Connect(function()
     stopAutoFarm()
+    LocalPlayer.CameraMaxZoomDistance = originalMaxZoom
     for _, h in pairs(partnerHighlights) do if h then h:Destroy() end end
+    for _, h in pairs(murdererHighlights) do if h then h:Destroy() end end
     for _, data in pairs(partnerBeams) do
         pcall(function()
             if data.beam then data.beam:Destroy() end
@@ -1181,6 +1894,7 @@ closeBtn.MouseButton1Click:Connect(function()
     for partner, _ in pairs(selectedPartners) do
         clearPartnerCoinVisuals(partner)
     end
+    notifGui:Destroy()
     screenGui:Destroy()
 end)
 
@@ -1203,12 +1917,10 @@ toggleBtn.MouseButton1Click:Connect(function()
     if isAutoFarmActive then
         toggleBtn.Text = "Auto Farm: ON"
         toggleBtn.TextColor3 = Color3.fromRGB(80, 220, 120)
-        print("[MM2 Debug Action] Натиснуто: Увімкнути автофарм.")
         startAutoFarm()
     else
         toggleBtn.Text = "Auto Farm: OFF"
         toggleBtn.TextColor3 = Color3.fromRGB(220, 80, 80)
-        print("[MM2 Debug Action] Натиснуто: Вимкнути автофарм.")
         stopAutoFarm()
     end
 end)
@@ -1375,97 +2087,137 @@ fillCorner.CornerRadius = UDim.new(0, 5)
 fillCorner.Parent = sliderFill
 
 local statsLabel = Instance.new("TextLabel")
-statsLabel.Size = UDim2.new(1, -20, 0, 22)
-statsLabel.Position = UDim2.new(0, 10, 0, 204)
+statsLabel.Size = UDim2.new(1, -20, 0, 20)
+statsLabel.Position = UDim2.new(0, 10, 0, 200)
 statsLabel.BackgroundTransparency = 1
 statsLabel.Text = "Speed: 0/h"
 statsLabel.TextColor3 = Color3.fromRGB(100, 220, 255)
 statsLabel.Font = Enum.Font.GothamBold
-statsLabel.TextSize = 12
+statsLabel.TextSize = 11
 statsLabel.TextXAlignment = Enum.TextXAlignment.Left
 statsLabel.Parent = mainFrame
 
 local roundCollectedLabel = Instance.new("TextLabel")
-roundCollectedLabel.Size = UDim2.new(1, -20, 0, 22)
-roundCollectedLabel.Position = UDim2.new(0, 10, 0, 228)
+roundCollectedLabel.Size = UDim2.new(1, -20, 0, 20)
+roundCollectedLabel.Position = UDim2.new(0, 10, 0, 220)
 roundCollectedLabel.BackgroundTransparency = 1
 roundCollectedLabel.Text = "Coins per round: 0/0"
 roundCollectedLabel.TextColor3 = Color3.fromRGB(255, 220, 100)
 roundCollectedLabel.Font = Enum.Font.GothamBold
-roundCollectedLabel.TextSize = 12
+roundCollectedLabel.TextSize = 11
 roundCollectedLabel.TextXAlignment = Enum.TextXAlignment.Left
 roundCollectedLabel.Parent = mainFrame
 
 local totalCollectedLabel = Instance.new("TextLabel")
-totalCollectedLabel.Size = UDim2.new(1, -20, 0, 22)
-totalCollectedLabel.Position = UDim2.new(0, 10, 0, 250)
+totalCollectedLabel.Size = UDim2.new(1, -20, 0, 20)
+totalCollectedLabel.Position = UDim2.new(0, 10, 0, 240)
 totalCollectedLabel.BackgroundTransparency = 1
 totalCollectedLabel.Text = "Total collected: 0"
 totalCollectedLabel.TextColor3 = Color3.fromRGB(150, 255, 150)
 totalCollectedLabel.Font = Enum.Font.GothamBold
-totalCollectedLabel.TextSize = 12
+totalCollectedLabel.TextSize = 11
 totalCollectedLabel.TextXAlignment = Enum.TextXAlignment.Left
 totalCollectedLabel.Parent = mainFrame
 
-local partnerLabel = Instance.new("TextLabel")
-partnerLabel.Size = UDim2.new(1, -20, 0, 22)
-partnerLabel.Position = UDim2.new(0, 10, 0, 272)
-partnerLabel.BackgroundTransparency = 1
-partnerLabel.Text = "Partners: 0"
-partnerLabel.TextColor3 = Color3.fromRGB(200, 150, 255)
-partnerLabel.Font = Enum.Font.GothamBold
-partnerLabel.TextSize = 11
-partnerLabel.TextXAlignment = Enum.TextXAlignment.Left
-partnerLabel.Parent = mainFrame
+-- Неклікабельний текст Success Rate (прибрано кнопку)
+local successRateLabel = Instance.new("TextLabel")
+successRateLabel.Size = UDim2.new(1, -20, 0, 20)
+successRateLabel.Position = UDim2.new(0, 10, 0, 260)
+successRateLabel.BackgroundTransparency = 1
+successRateLabel.Text = "Success Rate: 0%"
+successRateLabel.RichText = true
+successRateLabel.TextColor3 = Color3.fromRGB(80, 220, 255)
+successRateLabel.Font = Enum.Font.GothamBold
+successRateLabel.TextSize = 11
+successRateLabel.TextXAlignment = Enum.TextXAlignment.Left
+successRateLabel.Parent = mainFrame
+
+local activePartnerBtn = Instance.new("TextButton")
+activePartnerBtn.Size = UDim2.new(1, -20, 0, 22)
+activePartnerBtn.Position = UDim2.new(0, 10, 0, 282)
+activePartnerBtn.BackgroundTransparency = 1
+activePartnerBtn.Text = "Partners: 0"
+activePartnerBtn.TextColor3 = Color3.fromRGB(200, 150, 255)
+activePartnerBtn.Font = Enum.Font.GothamBold
+activePartnerBtn.TextSize = 11
+activePartnerBtn.TextXAlignment = Enum.TextXAlignment.Left
+activePartnerBtn.Parent = mainFrame
+
+activePartnerBtn.MouseButton1Click:Connect(function()
+    partnerListPanel.Visible = not partnerListPanel.Visible
+    playersFrame.Visible = false
+    if partnerListPanel.Visible then
+        updateActivePartnerPanel()
+    end
+end)
 
 local timerLabel = Instance.new("TextLabel")
 timerLabel.Size = UDim2.new(1, -20, 0, 22)
-timerLabel.Position = UDim2.new(0, 10, 0, 294)
+timerLabel.Position = UDim2.new(0, 10, 0, 306)
 timerLabel.BackgroundTransparency = 1
-timerLabel.Text = "Time: 00:00"
+timerLabel.Text = "Time: 00:00:00"
 timerLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
 timerLabel.Font = Enum.Font.GothamBold
-timerLabel.TextSize = 12
+timerLabel.TextSize = 11
 timerLabel.TextXAlignment = Enum.TextXAlignment.Left
 timerLabel.Parent = mainFrame
 
 local statusLabel = Instance.new("TextLabel")
 statusLabel.Size = UDim2.new(1, -20, 0, 22)
-statusLabel.Position = UDim2.new(0, 10, 0, 316)
+statusLabel.Position = UDim2.new(0, 10, 0, 330)
 statusLabel.BackgroundTransparency = 1
 statusLabel.Text = "Status: Idle"
 statusLabel.TextColor3 = Color3.fromRGB(255, 150, 100)
 statusLabel.Font = Enum.Font.GothamBold
-statusLabel.TextSize = 12
+statusLabel.TextSize = 11
 statusLabel.TextXAlignment = Enum.TextXAlignment.Left
 statusLabel.Parent = mainFrame
 
+local function formatTimer(totalSeconds)
+    local days = math.floor(totalSeconds / 86400)
+    local hours = math.floor((totalSeconds % 86400) / 3600)
+    local minutes = math.floor((totalSeconds % 3600) / 60)
+    local seconds = math.floor(totalSeconds % 60)
+
+    if days > 0 then
+        return string.format("%dd %02d:%02d:%02d", days, hours, minutes, seconds)
+    else
+        return string.format("%02d:%02d:%02d", hours, minutes, seconds)
+    end
+end
+
+sdfSuccessLabel.RichText = true
+sdfFailLabel.RichText = true
+
 task.spawn(function()
     while true do
+        local totalAttempts = successfulFullBags + failedBagAttempts
+        local ratePercent = 0
+        if totalAttempts > 0 then
+            ratePercent = math.floor((successfulFullBags / totalAttempts) * 100)
+        end
+
+        sdfSuccessLabel.Text = "Full Bags (Success): <font color=\"rgb(80,220,120)\">" .. successfulFullBags .. "</font>"
+        sdfFailLabel.Text = "Failed Runs: <font color=\"rgb(255,100,100)\">" .. failedBagAttempts .. "</font>"
+
+        local formattedRateText = string.format("Success Rate: %d%% (<font color=\"rgb(255,100,100)\">%d</font>/<font color=\"rgb(80,220,120)\">%d</font>)", ratePercent, failedBagAttempts, successfulFullBags)
+
         if isAutoFarmActive then
             statsLabel.Text = "Speed: " .. coinsPerHour .. "/h"
             roundCollectedLabel.Text = "Coins per round: " .. currentMatchCoins .. "/" .. maxMatchCoins
             totalCollectedLabel.Text = "Total collected: " .. sessionCoinsCollected
+            successRateLabel.Text = formattedRateText
             statusLabel.Text = "Status: " .. currentFarmStatus
             
             local count = 0
-            local partnerDistText = ""
-            for _, partner in pairs(selectedPartners) do
+            for _, _ in pairs(selectedPartners) do
                 count = count + 1
-                if partner and partner.Character and partner.Character:FindFirstChild("HumanoidRootPart") and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
-                    local dist = math.floor((LocalPlayer.Character.HumanoidRootPart.Position - partner.Character.HumanoidRootPart.Position).Magnitude)
-                    partnerDistText = " (" .. dist .. "m)"
-                else
-                    partnerDistText = " (N/A)"
-                end
             end
-            partnerLabel.Text = "Partners: " .. count .. partnerDistText
+            activePartnerBtn.Text = "Partners: " .. count .. " (Click to View)"
             
             if isTimerRunning and sessionStartTime then
-                local elapsed = math.floor(tick() - sessionStartTime)
-                local minutes = math.floor(elapsed / 60)
-                local seconds = elapsed % 60
-                timerLabel.Text = string.format("Time: %02d:%02d", minutes, seconds)
+                local elapsed = tick() - sessionStartTime
+                timerLabel.Text = "Time: " .. formatTimer(elapsed)
             else
                 timerLabel.Text = "Time: Waiting..."
             end
@@ -1473,8 +2225,9 @@ task.spawn(function()
             statsLabel.Text = "Speed: 0/h"
             roundCollectedLabel.Text = "Coins per round: 0/0"
             totalCollectedLabel.Text = "Total collected: 0"
-            partnerLabel.Text = "Partners: 0"
-            timerLabel.Text = "Time: 00:00"
+            successRateLabel.Text = formattedRateText
+            activePartnerBtn.Text = "Partners: 0"
+            timerLabel.Text = "Time: 00:00:00"
             statusLabel.Text = "Status: Idle"
         end
         task.wait(1)
@@ -1494,9 +2247,16 @@ local function updateSlider(input)
     if flySpeed > 22 then
         speedLabel.Text = "Flight Speed: " .. flySpeed .. "⚠️"
         speedWarningLabel.Text = "Speed above 22 May kick you from the game"
+        if not speedWarningSent then
+            speedWarningSent = true
+            if notifySettings.solo.speedWarning then
+                sendNotification("Flight Speed above 22 set! Risk of kick")
+            end
+        end
     else
         speedLabel.Text = "Flight Speed: " .. flySpeed
         speedWarningLabel.Text = ""
+        speedWarningSent = false
     end
 
     sliderFill.Size = UDim2.new(scale, 0, 1, 0)
